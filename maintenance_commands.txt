@@ -18,4 +18,3 @@ df -h
 
 # Check Docker disk usage
 docker system df -v
-
