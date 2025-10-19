@@ -1,0 +1,20 @@
+# View logs
+docker-compose logs -f
+
+# Restart application
+docker-compose restart
+
+# Rebuild and restart
+docker-compose up -d --build
+
+# Stop application
+docker-compose down
+
+# Clean up everything
+docker system prune -af --volumes
+
+# Check disk space
+df -h
+
+# Check Docker disk usage
+docker system df -v
