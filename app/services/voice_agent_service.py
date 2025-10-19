@@ -54,6 +54,7 @@ class VoiceAgentService:
         except Exception as e:
             print(f"Error initiating call: {e}")
             return {"success": False, "error": str(e)}
+            
     
     async def process_user_speech(self, call_sid: str, user_text: str) -> Dict[str, Any]:
         """Process user speech and generate AI response"""
