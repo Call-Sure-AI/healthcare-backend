@@ -50,6 +50,20 @@ AI_FUNCTIONS = [
             },
             "required": ["patient_name", "patient_phone", "doctor_id", "appointment_date", "appointment_time"]
         }
+    },
+    {
+        "name": "get_doctor_schedule",
+        "description": "Get the next few available dates for a specific doctor. Use this when the user asks when a doctor is available but hasn't provided a date.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "doctor_id": {
+                    "type": "string",
+                    "description": "The exact doctor_id (e.g., DOC001)."
+                }
+            },
+            "required": ["doctor_id"]
+        }
     }
 ]
 
@@ -71,10 +85,12 @@ class AIToolsExecutor:
                 return self.get_available_slots(**arguments)
             elif function_name == "book_appointment":
                 return self.book_appointment(**arguments)
+            elif function_name == "get_doctor_schedule":
+                return self.get_doctor_schedule(**arguments)
             else:
                 return {"success": False, "error": f"Unknown function: {function_name}"}
         except Exception as e:
-            print(f"❌ Function execution error: {e}")
+            print(f"Function execution error: {e}")
             import traceback
             traceback.print_exc()
             return {"success": False, "error": str(e)}
@@ -131,7 +147,7 @@ class AIToolsExecutor:
             }
             
         except Exception as e:
-            print(f"❌ Error in get_available_doctors: {e}")
+            print(f"Error in get_available_doctors: {e}")
             import traceback
             traceback.print_exc()
             return {"success": False, "error": str(e), "doctors": []}
@@ -314,6 +330,35 @@ class AIToolsExecutor:
                 "slots": []
             }
 
+    def get_doctor_schedule(self, doctor_id: str) -> Dict[str, Any]:
+        """Get the next available dates for a specific doctor."""
+        try:
+            print(f"🗓️  Fetching schedule for doctor: {doctor_id}")
+            from datetime import date
+            
+            # Resolve doctor ID from name if necessary
+            if not doctor_id.startswith('DOC'):
+                resolved_id = self._find_doctor_id_by_name(doctor_id)
+                if not resolved_id:
+                     return {"success": False, "error": f"Could not find a doctor named '{doctor_id}'."}
+                doctor_id = resolved_id
+
+            available_dates = DoctorService.get_doctor_schedule(self.db, doctor_id, date.today())
+            
+            if not available_dates:
+                return {
+                    "success": False,
+                    "error": "This doctor has no upcoming availability. Please check another doctor."
+                }
+            
+            return {
+                "success": True,
+                "doctor_id": doctor_id,
+                "available_dates": available_dates
+            }
+        except Exception as e:
+            print(f"Error in get_doctor_schedule: {e}")
+            return {"success": False, "error": str(e)}
     def book_appointment(
         self,
         patient_name: str,

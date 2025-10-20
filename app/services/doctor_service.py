@@ -171,3 +171,30 @@ class DoctorService:
             "rescheduled_appointments": rescheduled_count,
             "date": today.strftime('%Y-%m-%d')
         }
+
+    @staticmethod
+    def get_doctor_schedule(db: Session, doctor_id: str, start_date: date):
+        """
+        Get the next N available dates for a doctor from a given start date.
+        """
+        from datetime import timedelta
+
+        doctor = DoctorService.get_doctor_by_id(db, doctor_id)
+
+        
+        available_dates = []
+        check_date = start_date
+
+        while len(available_dates) < 3 and (check_date - start_date).days < 30:
+            is_on_leave = db.query(DoctorLeave).filter(
+                DoctorLeave.doctor_id == doctor_id,
+                DoctorLeave.start_date <= check_date,
+                DoctorLeave.end_date >= check_date
+            ).first()
+
+            if check_date.weekday() < 5 and not is_on_leave:
+                available_dates.append(check_date.strftime('%Y-%m-%d'))
+            
+            check_date += timedelta(days=1)
+            
+        return available_dates

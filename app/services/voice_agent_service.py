@@ -219,7 +219,22 @@ class VoiceAgentService:
             else:
                 error = result.get("error", "")
                 return f"I'm sorry, I wasn't able to complete the booking. {error}. Would you like to try again?"
-        
+        elif function_name == "get_doctor_schedule":
+            if result.get("success"):
+                dates = result.get("available_dates", [])
+                if not dates:
+                    return "I'm sorry, but that doctor does not seem to have any upcoming availability."
+                
+                # Format date list nicely
+                formatted_dates = [datetime.strptime(d, "%Y-%m-%d").strftime("%B %dth") for d in dates]
+
+                if len(formatted_dates) == 1:
+                    return f"That doctor is next available on {formatted_dates[0]}. Would you like to check available times for that day?"
+                else:
+                    dates_text = ", ".join(formatted_dates[:-1]) + f", and {formatted_dates[-1]}"
+                    return f"That doctor has availability on {dates_text}. Which date would you like to book for?"
+            else:
+                return "I'm sorry, I couldn't retrieve that doctor's schedule at the moment."        
         else:
             return "Let me help you with that."
 
@@ -277,9 +292,15 @@ class VoiceAgentService:
                             arguments["doctor_id"] = resolved_id
                             print(f"Resolved to: {resolved_id}")
                         else:
-                            # Default to first available
-                            arguments["doctor_id"] = available_doctors[0]["doctor_id"]
-                            print(f"Defaulting to first doctor: {available_doctors[0]['doctor_id']}")
+                            print("Could not resolve doctor. Asking for clarification.")
+                            clarification_text = "I'm sorry, I couldn't identify that doctor. Could you please tell me the name of the doctor you'd like to see from the available list?"
+                            
+                            redis_service.append_to_conversation(call_sid, "assistant", clarification_text)
+                            return {
+                                "success": True,
+                                "response": clarification_text,
+                                "function_called": False, # No function was executed
+                            }
                     else:
                         print(f"No available doctors in session!")
             

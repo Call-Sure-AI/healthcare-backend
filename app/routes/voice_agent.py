@@ -68,7 +68,7 @@ async def handle_incoming_call(
         gather.say(
             f"Hello! Thank you for calling {voice_config.CLINIC_NAME}. "
             "I'm your AI assistant. How may I help you today?",
-            voice="Polly.Aditi",
+            voice="Polly.Kajal",
             language="en-IN"
         )
         
@@ -76,7 +76,7 @@ async def handle_incoming_call(
 
         response.say(
             "I didn't catch that. Let me try again.",
-            voice="Polly.Aditi",
+            voice="Polly.Kajal",
             language="en-IN"
         )
         response.redirect(f"{base_url}/api/v1/voice/incoming")
@@ -202,7 +202,7 @@ async def handle_gather(
             
             gather.say(
                 "I didn't catch that. Could you please repeat?",
-                voice="Polly.Aditi",
+                voice="Polly.Kajal",
                 language="en-IN"
             )
             
@@ -227,7 +227,7 @@ async def handle_gather(
             
             gather.say(
                 "I'm having trouble processing that. Please try again.",
-                voice="Polly.Aditi",
+                voice="Polly.Kajal",
                 language="en-IN"
             )
             
@@ -238,9 +238,7 @@ async def handle_gather(
 
         end_phrases = [
             "goodbye",
-            "have a great day",
-            "anything else i can help",
-            "is there anything else"
+            "have a great day"
         ]
         should_end = any(phrase in response_text.lower() for phrase in end_phrases)
 
@@ -250,7 +248,7 @@ async def handle_gather(
         if should_end:
             response.say(
                 response_text,
-                voice="Polly.Aditi",
+                voice="Polly.Kajal",
                 language="en-IN"
             )
             response.hangup()
@@ -271,7 +269,7 @@ async def handle_gather(
             
             gather.say(
                 response_text,
-                voice="Polly.Aditi",
+                voice="Polly.Kajal",
                 language="en-IN"
             )
             
@@ -279,7 +277,7 @@ async def handle_gather(
 
             response.say(
                 "Are you still there?",
-                voice="Polly.Aditi",
+                voice="Polly.Kajal",
                 language="en-IN"
             )
             response.redirect(f"{base_url}/api/v1/voice/gather")
@@ -295,7 +293,7 @@ async def handle_gather(
         response = VoiceResponse()
         response.say(
             "I apologize for the inconvenience. Please call back later.",
-            voice="Polly.Aditi",
+            voice="Polly.Kajal",
             language="en-IN"
         )
         response.hangup()

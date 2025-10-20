@@ -72,10 +72,10 @@ class VoiceAgentConfig:
         missing = [name for name, value in required_vars if not value]
         
         if missing:
-            print(f"❌ Missing required environment variables: {', '.join(missing)}")
+            print(f"Missing required environment variables: {', '.join(missing)}")
             return False
         
-        print("✅ Voice agent configuration validated")
+        print("Voice agent configuration validated")
         return True
 
 
