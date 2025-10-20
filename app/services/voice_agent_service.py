@@ -90,7 +90,8 @@ class VoiceAgentService:
             result = await openai_service.process_user_input(
                 user_message=user_text,
                 conversation_history=conversation_history,
-                available_functions=ai_functions
+                available_functions=ai_functions,
+                system_prompt=voice_config.SYSTEM_PROMPT
             )
 
             if result.get("function_call"):
@@ -257,9 +258,9 @@ class VoiceAgentService:
                 import json
                 arguments = json.loads(arguments)
             
-            print(f"   Arguments: {arguments}")
+            print(f"Arguments: {arguments}")
 
-            if function_name in ["get_available_slots", "book_appointment"]:
+            if function_name in ["get_available_slots", "book_appointment", "get_doctor_schedule"]:
                 doctor_id = arguments.get("doctor_id", "")
                 
                 # Get available doctors from session

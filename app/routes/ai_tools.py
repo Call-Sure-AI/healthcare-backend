@@ -5,12 +5,10 @@ from app.services.doctor_service import DoctorService
 from app.services.appointment_service import AppointmentService
 from app.models.leave import DoctorLeave
 
-
-# Function definitions for GPT-4
 AI_FUNCTIONS = [
     {
         "name": "get_available_doctors",
-        "description": "Get list of all active doctors available for appointments.",
+        "description": "Get a list of all active doctors. Use this when the user wants to know which doctors are available.",
         "parameters": {
             "type": "object",
             "properties": {},
@@ -18,18 +16,32 @@ AI_FUNCTIONS = [
         }
     },
     {
-        "name": "get_available_slots",
-        "description": "Get available appointment time slots for a specific doctor on a given date. IMPORTANT: You MUST ask the user for their preferred appointment date before calling this function. Do NOT make up dates.",
+        "name": "get_doctor_schedule",
+        "description": "Finds the next available DATES for a single, specific doctor. Use this ONLY when the user asks for a doctor's availability but has NOT provided a specific date.",
         "parameters": {
             "type": "object",
             "properties": {
                 "doctor_id": {
                     "type": "string",
-                    "description": "The exact doctor_id from the available doctors list (e.g., DOC001, DOC007, DOC0011)"
+                    "description": "The exact doctor_id of the doctor (e.g., DOC2005)."
+                }
+            },
+            "required": ["doctor_id"]
+        }
+    },
+    {
+        "name": "get_available_slots",
+        "description": "Gets the available appointment TIME SLOTS for a doctor on ONE specific date. Use this ONLY after you have confirmed both the doctor and the exact date with the user.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "doctor_id": {
+                    "type": "string",
+                    "description": "The exact doctor_id for the appointment."
                 },
                 "date": {
                     "type": "string",
-                    "description": "Appointment date in YYYY-MM-DD format. This date MUST come from the user's input, never make up a date."
+                    "description": "The specific date for the appointment in YYYY-MM-DD format."
                 }
             },
             "required": ["doctor_id", "date"]
@@ -37,7 +49,7 @@ AI_FUNCTIONS = [
     },
     {
         "name": "book_appointment",
-        "description": "Book an appointment for a patient with a specific doctor.",
+        "description": "Books the final appointment after all details (patient name, phone, doctor, date, and time) have been collected and confirmed.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -49,20 +61,6 @@ AI_FUNCTIONS = [
                 "reason": {"type": "string"}
             },
             "required": ["patient_name", "patient_phone", "doctor_id", "appointment_date", "appointment_time"]
-        }
-    },
-    {
-        "name": "get_doctor_schedule",
-        "description": "Get the next few available DATES for a specific doctor. Use this tool ONLY when the user asks for a doctor's availability but has NOT provided a specific date.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "doctor_id": {
-                    "type": "string",
-                    "description": "The exact doctor_id (e.g., DOC001)."
-                }
-            },
-            "required": ["doctor_id"]
         }
     }
 ]
