@@ -91,7 +91,6 @@ class VoiceAgentService:
                 user_message=user_text,
                 conversation_history=conversation_history,
                 available_functions=ai_functions,
-                system_prompt=voice_config.SYSTEM_PROMPT
             )
 
             if result.get("function_call"):
