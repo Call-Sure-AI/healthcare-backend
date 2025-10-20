@@ -58,7 +58,7 @@ async def handle_incoming_call(
             input='speech',
             action=gather_url,
             method='POST',
-            language='en-IN',
+            language='en-GB',
             speech_timeout='auto',
             speech_model='phone_call',
             enhanced=True,
@@ -68,16 +68,16 @@ async def handle_incoming_call(
         gather.say(
             f"Hello! Thank you for calling {voice_config.CLINIC_NAME}. "
             "I'm your AI assistant. How may I help you today?",
-            voice="Polly.Kajal",
-            language="en-IN"
+            voice="Polly.Amy",
+            language="en-GB"
         )
         
         response.append(gather)
 
         response.say(
             "I didn't catch that. Let me try again.",
-            voice="Polly.Kajal",
-            language="en-IN"
+            voice="Polly.Amy",
+            language="en-GB"
         )
         response.redirect(f"{base_url}/api/v1/voice/incoming")
         
@@ -195,15 +195,15 @@ async def handle_gather(
                 input='speech',
                 action=f"{base_url}/api/v1/voice/gather",
                 method='POST',
-                language='en-IN',
+                language='en-GB',
                 speech_timeout='auto',
                 speech_model='phone_call'
             )
             
             gather.say(
                 "I didn't catch that. Could you please repeat?",
-                voice="Polly.Kajal",
-                language="en-IN"
+                voice="Polly.Amy",
+                language="en-GB"
             )
             
             response.append(gather)
@@ -221,14 +221,14 @@ async def handle_gather(
                 input='speech',
                 action=f"{str(request.base_url).rstrip('/')}/api/v1/voice/gather",
                 method='POST',
-                language='en-IN',
+                language='en-GB',
                 speech_timeout='auto'
             )
             
             gather.say(
                 "I'm having trouble processing that. Please try again.",
-                voice="Polly.Kajal",
-                language="en-IN"
+                voice="Polly.Amy",
+                language="en-GB"
             )
             
             response.append(gather)
@@ -248,8 +248,8 @@ async def handle_gather(
         if should_end:
             response.say(
                 response_text,
-                voice="Polly.Kajal",
-                language="en-IN"
+                voice="Polly.Amy",
+                language="en-GB"
             )
             response.hangup()
 
@@ -261,7 +261,7 @@ async def handle_gather(
                 input='speech',
                 action=f"{base_url}/api/v1/voice/gather",
                 method='POST',
-                language='en-IN',
+                language='en-GB',
                 speech_timeout='auto',
                 speech_model='phone_call',
                 enhanced=True
@@ -269,16 +269,16 @@ async def handle_gather(
             
             gather.say(
                 response_text,
-                voice="Polly.Kajal",
-                language="en-IN"
+                voice="Polly.Amy",
+                language="en-GB"
             )
             
             response.append(gather)
 
             response.say(
                 "Are you still there?",
-                voice="Polly.Kajal",
-                language="en-IN"
+                voice="Polly.Amy",
+                language="en-GB"
             )
             response.redirect(f"{base_url}/api/v1/voice/gather")
         
@@ -293,8 +293,8 @@ async def handle_gather(
         response = VoiceResponse()
         response.say(
             "I apologize for the inconvenience. Please call back later.",
-            voice="Polly.Kajal",
-            language="en-IN"
+            voice="Polly.Amy",
+            language="en-GB"
         )
         response.hangup()
         

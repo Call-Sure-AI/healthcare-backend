@@ -53,7 +53,7 @@ AI_FUNCTIONS = [
     },
     {
         "name": "get_doctor_schedule",
-        "description": "Get the next few available dates for a specific doctor. Use this when the user asks when a doctor is available but hasn't provided a date.",
+        "description": "Get the next few available DATES for a specific doctor. Use this tool ONLY when the user asks for a doctor's availability but has NOT provided a specific date.",
         "parameters": {
             "type": "object",
             "properties": {
