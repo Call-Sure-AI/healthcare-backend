@@ -9,6 +9,7 @@ from app.routes import voice_agent
 from app.config.redis_config import redis_config
 from app.config.voice_config import voice_config
 import time
+from fastapi.staticfiles import StaticFiles
 
 Base.metadata.create_all(bind=engine)
 
@@ -154,7 +155,7 @@ async def general_exception_handler(request: Request, exc: Exception):
 app.include_router(doctor.router, prefix="/api/v1", tags=["👨‍⚕️ Doctors"])
 app.include_router(appointment.router, prefix="/api/v1", tags=["📅 Appointments"])
 app.include_router(voice_agent.router, prefix="/api/v1", tags=["Voice Agent"])
-
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.get("/", tags=["System"])
 def root():

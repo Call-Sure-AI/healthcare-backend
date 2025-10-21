@@ -183,12 +183,12 @@ class VoiceAgentService:
                 # Format doctor list
                 if len(doctors) == 1:
                     doc = doctors[0]
-                    return f"We have Dr. {doc['name']} ({doc['degree']}) available. Would you like to book an appointment with Dr. {doc['name']}?"
+                    return f"We have {doc['name']} ({doc['degree']}) available. Would you like to book an appointment with Dr. {doc['name']}?"
                 elif len(doctors) == 2:
-                    return f"We have Dr. {doctors[0]['name']} and Dr. {doctors[1]['name']} available. Which doctor would you prefer?"
+                    return f"We have {doctors[0]['name']} and {doctors[1]['name']} available. Which doctor would you prefer?"
                 else:
-                    doctor_names = ", ".join([f"Dr. {doc['name']}" for doc in doctors[:-1]])
-                    last_doctor = f"Dr. {doctors[-1]['name']}"
+                    doctor_names = ", ".join([f"{doc['name']}" for doc in doctors[:-1]])
+                    last_doctor = f"{doctors[-1]['name']}"
                     return f"We have {doctor_names}, and {last_doctor} available. Which doctor would you like to see?"
             else:
                 return "I'm having trouble fetching the doctor list at the moment. Could you try again?"

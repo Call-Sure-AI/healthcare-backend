@@ -18,6 +18,11 @@ class VoiceAgentConfig:
     OPENAI_TTS_MODEL = os.getenv("OPENAI_TTS_MODEL")
     OPENAI_STT_MODEL = os.getenv("OPENAI_STT_MODEL")
 
+    ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+    ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID")
+
+    DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
+
     CALL_SESSION_TTL = int(os.getenv("CALL_SESSION_TTL"))
     MAX_CALL_DURATION = int(os.getenv("MAX_CALL_DURATION"))
     MAX_RETRY_ATTEMPTS = int(os.getenv("MAX_RETRY_ATTEMPTS"))
@@ -57,6 +62,8 @@ class VoiceAgentConfig:
             ("TWILIO_AUTH_TOKEN", cls.TWILIO_AUTH_TOKEN),
             ("TWILIO_PHONE_NUMBER", cls.TWILIO_PHONE_NUMBER),
             ("OPENAI_API_KEY", cls.OPENAI_API_KEY),
+            ("ELEVENLABS_API_KEY", cls.ELEVENLABS_API_KEY),
+            ("DEEPGRAM_API_KEY", cls.DEEPGRAM_API_KEY),
         ]
         
         missing = [name for name, value in required_vars if not value]

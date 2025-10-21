@@ -250,15 +250,15 @@ class AIToolsExecutor:
     def get_available_slots(self, doctor_id: str, date: str) -> Dict[str, Any]:
         """Get available time slots for a doctor on a date"""
         try:
-            print(f"📅 Checking slots for doctor='{doctor_id}', date='{date}'")
+            print(f"Checking slots for doctor='{doctor_id}', date='{date}'")
             
             # Check if doctor_id looks like a name instead of an ID
             if not doctor_id.startswith('DOC'):
-                print(f"   ⚠️ '{doctor_id}' doesn't look like a doctor ID, attempting name lookup...")
+                print(f"'{doctor_id}' doesn't look like a doctor ID, attempting name lookup...")
                 resolved_id = self._find_doctor_id_by_name(doctor_id)
                 if resolved_id:
                     doctor_id = resolved_id
-                    print(f"   ✅ Resolved to: {doctor_id}")
+                    print(f"Resolved to: {doctor_id}")
                 else:
                     return {
                         "success": False,
@@ -290,11 +290,11 @@ class AIToolsExecutor:
                 formatted_date
             )
             
-            print(f"   API Response: {result}")
+            print(f"API Response: {result}")
             
             if "available_slots" in result:
                 slots = result["available_slots"]
-                print(f"✅ Found {len(slots)} slots")
+                print(f"Found {len(slots)} slots")
                 
                 if not slots:
                     return {
@@ -319,7 +319,7 @@ class AIToolsExecutor:
                 }
                 
         except Exception as e:
-            print(f"❌ Error in get_available_slots: {e}")
+            print(f"Error in get_available_slots: {e}")
             import traceback
             traceback.print_exc()
             return {
