@@ -9,7 +9,7 @@ from app.routes.ai_tools import AIToolsExecutor, get_ai_functions
 from app.utils.validators import validate_phone_number, parse_patient_name
 from app.models.call_session import CallSession
 from app.config.voice_config import voice_config
-
+from collections import defaultdict
 
 class VoiceAgentService:
     """Main service for handling voice agent conversations"""
@@ -200,12 +200,31 @@ class VoiceAgentService:
                     return f"I'm sorry, there are no available slots on that date. Would you like to try a different date?"
                 
                 # Format slot list
-                if len(slots) <= 3:
-                    slot_text = " or ".join(slots)
-                    return f"I have appointments available at {slot_text}. Which time works best for you?"
+                hourly_slots = self._group_slots_by_hour(slots)
+                if not hourly_slots:
+                     return "I couldn't find any specific time slots. Would you like to pick another date?"
+
+                hour_ranges = []
+                for hour, hour_slots in hourly_slots.items():
+                    # Format hour for am/pm
+                    period = "AM" if hour < 12 else "PM"
+                    display_hour = hour if hour <= 12 else hour - 12
+                    display_hour = 12 if display_hour == 0 else display_hour # Handle midnight/noon
+                    
+                    next_hour = display_hour + 1
+                    next_period = period
+                    if display_hour == 11:
+                        next_period = "PM" if period == "AM" else "AM"
+                    if display_hour == 12:
+                        next_hour = 1
+                    
+                    hour_ranges.append(f"between {display_hour} and {next_hour} {next_period}")
+
+                if len(hour_ranges) == 1:
+                    return f"I have appointments available {hour_ranges[0]}. Is that time suitable for you?"
                 else:
-                    first_slots = ", ".join(slots[:3])
-                    return f"I have several slots available including {first_slots}. What time would you prefer?"
+                    ranges_text = ", ".join(hour_ranges[:-1]) + f", and {hour_ranges[-1]}"
+                    return f"We have appointments available at several times, including {ranges_text}. Which time frame would you prefer?"
             else:
                 error = result.get("error", "Unable to check availability")
                 return f"I'm having trouble checking availability. {error}. Could you try a different date?"
@@ -219,6 +238,7 @@ class VoiceAgentService:
             else:
                 error = result.get("error", "")
                 return f"I'm sorry, I wasn't able to complete the booking. {error}. Would you like to try again?"
+
         elif function_name == "get_doctor_schedule":
             if result.get("success"):
                 dates = result.get("available_dates", [])
@@ -233,8 +253,20 @@ class VoiceAgentService:
                 else:
                     dates_text = ", ".join(formatted_dates[:-1]) + f", and {formatted_dates[-1]}"
                     return f"That doctor has availability on {dates_text}. Which date would you like to book for?"
+
             else:
-                return "I'm sorry, I couldn't retrieve that doctor's schedule at the moment."        
+                return "I'm sorry, I couldn't retrieve that doctor's schedule at the moment."
+                
+        elif function_name == "get_appointment_details":
+            if result.get("success"):
+                details = result.get("appointment", {})
+                return (
+                    f"Okay, I found your appointment. You are scheduled to see Dr. {details.get('doctor_name')} "
+                    f"on {details.get('appointment_date')} at {details.get('appointment_time')}. "
+                    f"Your confirmation number is {details.get('confirmation_number')}. Is there anything else?"
+                )
+            else:
+                return result.get("error", "I couldn't find an appointment for you.")        
         else:
             return "Let me help you with that."
 
@@ -450,10 +482,20 @@ class VoiceAgentService:
             return response
             
         except Exception as e:
-            print(f"❌ Error generating AI response: {e}")
+            print(f"Error generating AI response: {e}")
             return "Let me help you with that."""
 
-    
+    def _group_slots_by_hour(self, slots: List[str]) -> Dict[int, List[str]]:
+        """Groups a list of time slots (HH:MM) by hour."""
+        hourly_slots = defaultdict(list)
+        for slot in slots:
+            try:
+                hour = int(slot.split(':')[0])
+                hourly_slots[hour].append(slot)
+            except (ValueError, IndexError):
+                print(f"Warning: Could not parse slot '{slot}'")
+        return dict(sorted(hourly_slots.items()))
+
     async def end_call(self, call_sid: str) -> Dict[str, Any]:
         """End call and cleanup"""
         try:

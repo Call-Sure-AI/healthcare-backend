@@ -8,7 +8,7 @@ import json
 import base64
 import traceback
 import asyncio
-from twilio.twiml.voice_response import VoiceResponse, Connect, Stream, Play
+from twilio.twiml.voice_response import VoiceResponse, Connect, Stream, Play, Gather
 from app.config.database import get_db
 from app.config.voice_config import voice_config
 from app.services.voice_agent_service import VoiceAgentService
@@ -95,6 +95,7 @@ async def handle_full_transcript(call_sid: str, transcript: str):
         traceback.print_exc()
 
 
+# For websocket
 @router.post("/incoming")
 async def handle_incoming_call(
     request: Request,
@@ -103,15 +104,15 @@ async def handle_incoming_call(
     To: str = Form(...),
     db: Session = Depends(get_db)
 ):
-    """
-    Twilio webhook for incoming calls.
-    Connects to the WebSocket stream.
-    """
+
     try:
         print(f"Incoming call: {CallSid} from {From}")
         base_url = str(request.base_url).rstrip("/")
-        # Use wss:// if your server uses HTTPS
-        websocket_url = f"ws://{request.url.hostname}/api/v1/voice/stream?call_sid={CallSid}"
+        host = "woozier-rotundly-rayan.ngrok-free.dev"
+        print(f"Request host: {host}")
+        websocket_url = f"wss://{host}/api/v1/voice/direct-stream?call_sid={CallSid}"
+        #websocket_url = f"wss://{host}/test-ws"
+        print(f"Connecting call {CallSid} to WebSocket: {websocket_url}")
         
         response = VoiceResponse()
 
@@ -148,49 +149,128 @@ async def handle_incoming_call(
         twiml.hangup()
         return Response(content=str(twiml), media_type="application/xml")
 
-
-@router.websocket("/stream")
-async def websocket_stream(
-    websocket: WebSocket,
-    call_sid: str = Query(...), # Get call_sid from query param
+"""
+@router.post("/incoming")
+async def handle_incoming_call(
+    request: Request,
+    CallSid: str = Form(...),
+    From: str = Form(...),
+    To: str = Form(...),
     db: Session = Depends(get_db)
 ):
-    """WebSocket endpoint for real-time audio streaming with STT and TTS."""
-    await websocket.accept()
-    print(f"WebSocket connected for call: {call_sid}")
-
-    agent = VoiceAgentService(db)
-    # Ensure call session is initiated *before* Deepgram connects
-    # This prevents race conditions if Deepgram connects faster than initiate_call finishes
-    await agent.initiate_call(call_sid, "WebSocket", "WebSocket") # Use placeholders for From/To
-
-    stream_sid = None # Will be populated by 'start' event
-
-    # --- Initialize Deepgram ---
-    # Pass the callback function to handle full transcripts
-    deepgram_service = deepgram_manager.create_connection(
-        call_sid=call_sid,
-        on_speech_end_callback=lambda transcript: handle_full_transcript(call_sid, transcript)
-    )
-    if not await deepgram_service.connect():
-        print(f"Failed to connect to Deepgram for {call_sid}. Closing WebSocket.")
-        await websocket.close(code=1011, reason="STT connection failed")
-        await agent.end_call(call_sid) # Clean up session state
-        await deepgram_manager.remove_connection(call_sid)
-        return
-
-    # Store context for this call
-    call_context[call_sid] = {
-        "websocket": websocket,
-        "agent": agent,
-        "deepgram": deepgram_service,
-        "stream_sid": None # Will be updated on 'start'
-    }
-
     try:
-        # --- Initial Greeting ---
-        # We need the stream_sid *before* we can play audio back
-        # So we wait for the 'start' message, then send the greeting
+        print(f"Incoming call: {CallSid} from {From}")
+        base_url = str(request.base_url).rstrip("/")
+        gather_url = f"{base_url}/api/v1/voice/gather" # Point to the gather endpoint
+        response = VoiceResponse()
+
+        if not voice_config.VOICE_AGENT_ENABLED:
+            response.say(
+                "I'm sorry, the voice assistant is currently unavailable. Please try again later.",
+                 voice="Polly.Amy", language="en-GB" # Fallback voice
+            )
+            response.hangup()
+            return Response(content=str(response), media_type="application/xml")
+
+        # --- ELEVENLABS GREETING ---
+        agent = VoiceAgentService(db)
+        # Ensure session is created before generating audio that uses CallSid in filename
+        await agent.initiate_call(CallSid, From, To) 
+
+        greeting_text = f"Thank you for calling {voice_config.CLINIC_NAME}! How can I help you today?"
+        
+        # 1. Generate greeting audio
+        greeting_audio_path = await elevenlabs_service.generate_and_save_audio(greeting_text, CallSid)
+
+        if greeting_audio_path:
+            # 2. Get full URL and use <Play>
+            full_audio_url = f"{base_url}{greeting_audio_path}"
+            print(f"Playing initial greeting from: {full_audio_url}")
+            response.play(full_audio_url)
+        else:
+            # 3. Fallback to <Say> if ElevenLabs fails
+            print("ElevenLabs failed for greeting, falling back to Polly.")
+            response.say(greeting_text, voice="Polly.Amy", language="en-GB")
+        # --- END ELEVENLABS GREETING ---
+
+        # 4. Start Gathering *after* playing the greeting
+        gather = Gather(
+            input='speech',
+            action=gather_url,
+            method='POST',
+            language='en-IN', # Or your preferred STT language
+            speech_timeout='auto',
+            speech_model='phone_call',
+            enhanced=True,
+            hints='appointment, doctor, booking, schedule, time, date'
+            # No prompt needed inside Gather as it was played before
+        )
+        response.append(gather)
+
+        response.say(
+            "I didn't catch that. How can I help you?", 
+            voice="Polly.Amy",
+            language="en-GB"
+        )
+        # Redirect to gather, not incoming, to avoid infinite loop/new sessions
+        response.redirect(gather_url) 
+        
+        return Response(content=str(response), media_type="application/xml")
+        
+    except Exception as e:
+        print(f"Error handling incoming call: {e}")
+        traceback.print_exc()
+        
+        # Generic error response
+        twiml = VoiceResponse()
+        twiml.say(
+            "I'm sorry, we're experiencing technical difficulties. Please call back later.",
+             voice="Polly.Amy", language="en-GB"
+        )
+        twiml.hangup()
+        return Response(content=str(twiml), media_type="application/xml")
+"""
+
+
+"""@router.websocket("/stream")
+async def websocket_stream(
+    websocket: WebSocket,
+    call_sid: str = Query(...),
+):
+    print(f"--> /stream endpoint hit for call_sid: {call_sid}")
+
+    await websocket.accept()
+    print(f"WebSocket accepted for {call_sid}")
+
+    db = next(get_db())
+    
+    try:
+        agent = VoiceAgentService(db)
+        await agent.initiate_call(call_sid, "WebSocket", "WebSocket")
+
+        stream_sid = None
+
+        # Initialize Deepgram
+        deepgram_service = deepgram_manager.create_connection(
+            call_sid=call_sid,
+            on_speech_end_callback=lambda transcript: handle_full_transcript(call_sid, transcript)
+        )
+        if not await deepgram_service.connect():
+            print(f"Failed to connect to Deepgram for {call_sid}. Closing WebSocket.")
+            await websocket.close(code=1011, reason="STT connection failed")
+            await agent.end_call(call_sid)
+            await deepgram_manager.remove_connection(call_sid)
+            db.close()
+            return
+
+        # Store context
+        call_context[call_sid] = {
+            "websocket": websocket,
+            "agent": agent,
+            "deepgram": deepgram_service,
+            "stream_sid": None
+        }
+
         has_sent_greeting = False
 
         while True:
@@ -204,7 +284,6 @@ async def websocket_stream(
                 call_context[call_sid]["stream_sid"] = stream_sid
                 redis_service.update_session(call_sid, {"stream_sid": stream_sid})
 
-                # Now that we have stream_sid, send the initial greeting
                 if not has_sent_greeting:
                     greeting_text = f"Thank you for calling {voice_config.CLINIC_NAME}! How can I help you today?"
                     print(f"Sending initial greeting for {call_sid}")
@@ -213,30 +292,25 @@ async def websocket_stream(
                             await send_twilio_media(websocket, stream_sid, audio_chunk)
                         else:
                             print(f"Greeting TTS stream failed for {call_sid}.")
-                            break # Stop trying to send greeting
+                            break
                     await send_twilio_mark(websocket, stream_sid, "agent_finished_speaking")
                     has_sent_greeting = True
                     print(f"Finished sending initial greeting for {call_sid}")
 
-
             elif event == "media":
-                # Audio chunk from Twilio (user speaking)
                 payload = data.get("media", {}).get("payload")
                 if payload:
-                    # Decode from base64 and send to Deepgram
                     audio_chunk = base64.b64decode(payload)
                     await deepgram_service.send_audio(audio_chunk)
 
             elif event == "mark":
-                # Confirmation that our 'agent_finished_speaking' mark was received by Twilio
                 mark_name = data.get("mark", {}).get("name")
                 if mark_name == "agent_finished_speaking":
                     print(f"Twilio acknowledged agent finished speaking for {call_sid}")
-                    # You could potentially trigger something here if needed
 
             elif event == "stop":
                 print(f"Twilio stream stopped for call: {call_sid}")
-                break # Exit loop, will trigger finally block
+                break
 
     except WebSocketDisconnect:
         print(f"WebSocket disconnected by client for call: {call_sid}")
@@ -246,18 +320,15 @@ async def websocket_stream(
         traceback.print_exc()
     finally:
         print(f"Cleaning up resources for call: {call_sid}")
-        # Close Deepgram connection
         await deepgram_manager.remove_connection(call_sid)
-        # Clean up context
         call_context.pop(call_sid, None)
-        # End call session state (Redis + DB)
         await agent.end_call(call_sid)
-        # Ensure WebSocket is closed
+        db.close()
         try:
             await websocket.close()
-        except RuntimeError: # Already closed
+        except RuntimeError:
             pass
-        print(f"Cleanup complete for call: {call_sid}")
+        print(f"Cleanup complete for {call_sid}")"""
 
 async def process_audio_buffer(
     call_sid: str,
@@ -275,8 +346,8 @@ async def process_audio_buffer(
     except Exception as e:
         print(f"Error processing audio: {e}")
 
-
-"""@router.post("/gather")
+"""
+@router.post("/gather")
 async def handle_gather(
     request: Request,
     CallSid: str = Form(...),
@@ -378,7 +449,7 @@ async def handle_gather(
     except Exception as e:
         # ... (error handling)
         pass
-"""
+    """
 
 @router.post("/status")
 async def handle_call_status(
@@ -491,6 +562,7 @@ async def health_check():
             "twilio": "configured" if twilio_ok else "not configured",
             "openai": "configured" if openai_ok else "not configured",
             "elevenlabs": "configured" if elevenlabs_ok else "not configured",
+            "deepgram": "configured" if deepgram_ok else "not configured",
             "active_calls": len(active_connections)
         }
         

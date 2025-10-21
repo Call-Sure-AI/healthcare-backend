@@ -10,6 +10,14 @@ from app.config.redis_config import redis_config
 from app.config.voice_config import voice_config
 import time
 from fastapi.staticfiles import StaticFiles
+from fastapi import WebSocket, Query
+from typing import Dict, Any
+import base64
+from app.services.voice_agent_service import VoiceAgentService
+from app.services.deepgram_service import deepgram_manager
+from app.services.elevenlabs_service import elevenlabs_service  
+from app.services.redis_service import redis_service
+from app.config.voice_config import voice_config
 
 Base.metadata.create_all(bind=engine)
 
@@ -71,31 +79,39 @@ origins = [
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["*"],
-    max_age=3600,
 )
 
 
-@app.middleware("http")
+"""@app.middleware("http")
 async def log_requests(request: Request, call_next):
-    start_time = time.time()
 
-    response = await call_next(request)
+    if request.scope.get("type") == "websocket":
+        return await call_next(request)
 
-    process_time = time.time() - start_time
-    response.headers["X-Process-Time"] = str(process_time)
-
-    print(f"{request.method} {request.url.path} - Status: {response.status_code} - Time: {process_time:.4f}s")
+    if "/stream" in request.url.path or request.url.path.startswith("/api/v1/voice/stream"):
+        return await call_next(request)
     
-    return response
+    start_time = time.time()
+    response = await call_next(request)
+    process_time = time.time() - start_time
 
-@app.exception_handler(StarletteHTTPException)
+    if hasattr(response, 'headers') and response.status_code != 101:
+        try:
+            response.headers["X-Process-Time"] = str(process_time)
+        except Exception:
+            pass
+    
+    print(f"{request.method} {request.url.path} - Status: {response.status_code} - Time: {process_time:.4f}s")
+    return response"""
+
+
+
+"""@app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
-    """Handle HTTP exceptions with consistent format"""
     return JSONResponse(
         status_code=exc.status_code,
         content={
@@ -112,7 +128,6 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    """Handle validation errors with detailed field information"""
     errors = []
     for error in exc.errors():
         errors.append({
@@ -138,7 +153,6 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 @app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception):
-    """Handle unexpected errors"""
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={
@@ -151,10 +165,21 @@ async def general_exception_handler(request: Request, exc: Exception):
             "data": None
         }
     )
+"""
 
 app.include_router(doctor.router, prefix="/api/v1", tags=["👨‍⚕️ Doctors"])
 app.include_router(appointment.router, prefix="/api/v1", tags=["📅 Appointments"])
 app.include_router(voice_agent.router, prefix="/api/v1", tags=["Voice Agent"])
+
+
+@app.websocket("/test-ws")
+async def test_websocket(websocket: WebSocket):
+    print("Test WebSocket endpoint hit!")
+    await websocket.accept()
+    print("Test WebSocket accepted!")
+    await websocket.send_text("Connected successfully!")
+    await websocket.close()
+        
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.get("/", tags=["System"])
@@ -210,6 +235,32 @@ def api_status():
             }
         }
     }
+    
+
+@app.get("/debug/routes", tags=["System"])
+def list_routes():
+    """List all registered routes including WebSockets"""
+    routes = []
+    for route in app.routes:
+        route_info = {
+            "path": route.path,
+            "name": getattr(route, "name", "N/A"),
+        }
+        
+        # Check if it's a WebSocket route
+        if hasattr(route, "endpoint"):
+            import inspect
+            if inspect.iscoroutinefunction(route.endpoint):
+                # Check the signature for WebSocket parameter
+                sig = inspect.signature(route.endpoint)
+                if any("WebSocket" in str(param.annotation) for param in sig.parameters.values()):
+                    route_info["type"] = "WebSocket"
+                else:
+                    route_info["type"] = "HTTP"
+        
+        routes.append(route_info)
+    
+    return {"total": len(routes), "routes": routes}
 
 
 if __name__ == "__main__":

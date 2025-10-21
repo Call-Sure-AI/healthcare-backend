@@ -5,6 +5,7 @@ from app.services.doctor_service import DoctorService
 from fastapi import HTTPException, status
 from datetime import datetime, timedelta
 from collections import defaultdict
+from app.models.doctor import Doctor
 
 class AppointmentService:
     # Maximum appointments per hour per doctor
@@ -314,6 +315,30 @@ class AppointmentService:
             "capacity_utilization": f"{(len(scheduled_appointments) / total_capacity * 100):.1f}%" if total_capacity > 0 else "0%",
             "appointments_by_hour": dict(hourly_distribution),
             "max_per_hour": AppointmentService.MAX_APPOINTMENTS_PER_HOUR
+        }
+
+    @staticmethod
+    def get_appointment_details(db: Session, patient_name: str, patient_phone: str):
+        cleaned_phone = "".join(filter(str.isdigit, patient_phone))
+
+        appointment = db.query(Appointment).filter(
+            Appointment.patient_name.ilike(f"%{patient_name.strip()}%"),
+            Appointment.patient_phone.contains(cleaned_phone),
+            Appointment.status == AppointmentStatus.SCHEDULED
+        ).order_by(Appointment.created_at.desc()).first()
+        
+        if not appointment:
+            return None
+
+        doctor = db.query(Doctor).filter(Doctor.doctor_id == appointment.doctor_id).first()
+        doctor_name = doctor.name if doctor else "an unknown doctor"
+        
+        return {
+            "patient_name": appointment.patient_name,
+            "doctor_name": doctor_name,
+            "appointment_date": appointment.appointment_date,
+            "appointment_time": appointment.appointment_time,
+            "confirmation_number": f"APT-{appointment.id}"
         }
     
     @staticmethod
