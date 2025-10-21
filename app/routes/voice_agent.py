@@ -108,9 +108,9 @@ async def handle_incoming_call(
     try:
         print(f"Incoming call: {CallSid} from {From}")
         base_url = str(request.base_url).rstrip("/")
-        host = "woozier-rotundly-rayan.ngrok-free.dev"
-        print(f"Request host: {host}")
-        websocket_url = f"wss://{host}/api/v1/voice/direct-stream?call_sid={CallSid}"
+        #host = "woozier-rotundly-rayan.ngrok-free.dev"
+        #print(f"Request host: {host}")
+        websocket_url = websocket_url = f"wss://{request.url.hostname}/api/v1/voice/stream?call_sid={CallSid}"
         #websocket_url = f"wss://{host}/test-ws"
         print(f"Connecting call {CallSid} to WebSocket: {websocket_url}")
         
