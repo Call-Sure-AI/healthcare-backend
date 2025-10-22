@@ -1,3 +1,7 @@
+"""
+Deepgram STT Service for Deepgram SDK 5.1.0
+Uses DeepgramClientEnvironment (correct for SDK 5.x)
+"""
 import asyncio
 import base64
 import logging
@@ -21,15 +25,15 @@ class DeepgramService:
         self.audio_sent_count = 0
         
         logger.info("=" * 80)
-        logger.info("DeepgramService -> Initializing for SDK 5.1.0")
+        logger.info("DeepgramService -> Initializing SDK 5.1.0")
         logger.info("=" * 80)
         self._initialize_connection()
     
     def _initialize_connection(self):
-        """Initialize Deepgram connection for SDK 5.1.0"""
+        """Initialize Deepgram for SDK 5.1.0"""
         from app.config.voice_config import voice_config
         
-        # Check API key
+        # Get API key
         api_key = getattr(voice_config, 'DEEPGRAM_API_KEY', None)
         if not api_key:
             logger.error("❌ DEEPGRAM_API_KEY not set")
@@ -40,69 +44,62 @@ class DeepgramService:
         try:
             # Set environment variable (required for SDK 5.x)
             os.environ['DEEPGRAM_API_KEY'] = api_key
+            logger.info("✓ Environment variable set")
             
-            # Import for SDK 5.x
+            # Import SDK 5.x modules
             from deepgram import (
                 DeepgramClient,
-                DeepgramClientOptions,
                 LiveTranscriptionEvents,
                 LiveOptions,
             )
             
-            logger.info("✓ Imported Deepgram SDK 5.x modules")
+            logger.info("✓ Imported Deepgram SDK 5.x")
             
-            # Create config (SDK 5.x uses api_key parameter)
-            config = DeepgramClientOptions(
-                api_key=api_key,
-                verbose=logging.DEBUG  # Enable verbose logging
-            )
-            
-            # Create client
-            client = DeepgramClient("", config)
+            # Create client (SDK 5.x reads from environment variable)
+            client = DeepgramClient()
             logger.info("✓ DeepgramClient created")
             
-            # Get asynclive connection (SDK 5.x)
+            # Get asynclive connection
             self.dg_connection = client.listen.asynclive.v("1")
             logger.info("✓ Got asynclive connection")
             
-            # Store events enum for later use
+            # Store events enum
             self.LiveTranscriptionEvents = LiveTranscriptionEvents
             
             logger.info("=" * 80)
-            logger.info("✓✓✓ DEEPGRAM CLIENT READY")
+            logger.info("✓✓✓ DEEPGRAM INITIALIZED")
             logger.info("=" * 80)
             
         except Exception as e:
             logger.error("=" * 80)
-            logger.error(f"❌ INITIALIZATION FAILED: {e}")
+            logger.error(f"❌ FAILED: {e}")
             logger.error("=" * 80)
             import traceback
             traceback.print_exc()
             self.dg_connection = None
     
     async def connect(self) -> bool:
-        """Start Deepgram connection."""
+        """Start Deepgram connection"""
         if not self.dg_connection:
-            logger.error("❌ No connection - initialization failed")
+            logger.error("❌ No connection object")
             return False
         
         try:
             logger.info("=" * 80)
-            logger.info("CONNECTING TO DEEPGRAM")
+            logger.info("STARTING CONNECTION")
             logger.info("=" * 80)
             
-            # Import LiveOptions
             from deepgram import LiveOptions
             
-            # Register event handlers (SDK 5.x uses enum)
-            logger.info("Registering event handlers...")
+            # Register event handlers
+            logger.info("Registering handlers...")
             self.dg_connection.on(self.LiveTranscriptionEvents.Open, self._on_open)
             self.dg_connection.on(self.LiveTranscriptionEvents.Transcript, self._on_transcript)
             self.dg_connection.on(self.LiveTranscriptionEvents.Error, self._on_error)
             self.dg_connection.on(self.LiveTranscriptionEvents.Close, self._on_close)
-            logger.info("✓ Event handlers registered")
+            logger.info("✓ Handlers registered")
             
-            # Create options (SDK 5.x)
+            # Create options
             options = LiveOptions(
                 model="nova-3",
                 language="en-US",
@@ -114,14 +111,14 @@ class DeepgramService:
                 utterance_end_ms=1200,
             )
             
-            logger.info(f"Options: model={options.model}, encoding={options.encoding}")
+            logger.info(f"✓ Options: {options.model}, {options.encoding}, {options.sample_rate}Hz")
             
             # Start connection
-            logger.info("Starting connection...")
-            start_result = await self.dg_connection.start(options)
+            logger.info("Calling start()...")
+            result = await self.dg_connection.start(options)
             
             logger.info("=" * 80)
-            logger.info(f"✓✓✓ CONNECTED: {start_result}")
+            logger.info(f"✓✓✓ CONNECTED: {result}")
             logger.info("=" * 80)
             return True
             
@@ -134,25 +131,23 @@ class DeepgramService:
             return False
     
     def _on_open(self, *args, **kwargs):
-        """Called when WebSocket opens"""
+        """WebSocket opened"""
         logger.info("=" * 80)
-        logger.info("🎤🎤🎤 WEBSOCKET OPENED - READY!")
+        logger.info("🎤🎤🎤 WEBSOCKET OPENED - LISTENING!")
         logger.info("=" * 80)
     
     def _on_transcript(self, *args, **kwargs):
-        """Handle transcription events (SDK 5.x)"""
+        """Handle transcription"""
         try:
-            # SDK 5.x passes result in kwargs
             result = kwargs.get('result')
             if not result:
-                logger.debug("Transcript event with no result")
                 return
             
-            # Get transcript text
+            # Extract text
             text = ''
             if hasattr(result, 'channel'):
                 channel = result.channel
-                if hasattr(channel, 'alternatives') and len(channel.alternatives) > 0:
+                if hasattr(channel, 'alternatives') and channel.alternatives:
                     text = channel.alternatives[0].transcript or ''
             
             if not text.strip():
@@ -165,19 +160,18 @@ class DeepgramService:
                 self.final_result += f" {text}"
                 logger.info("─" * 80)
                 logger.info(f"📝 FINAL: '{text}'")
-                logger.info(f"📝 TOTAL: '{self.final_result.strip()}'")
+                logger.info(f"📝 ACCUMULATED: '{self.final_result.strip()}'")
                 logger.info("─" * 80)
                 
-                # Check for speech_final
+                # Check speech_final
                 speech_final = getattr(result, 'speech_final', False)
                 
                 if speech_final:
-                    self.speech_final = True
                     final_text = self.final_result.strip()
                     
                     logger.info("=" * 80)
-                    logger.info("🎤🎤🎤 SPEECH FINAL - USER SAID:")
-                    logger.info(f"'{final_text}'")
+                    logger.info("🎤🎤🎤 SPEECH FINAL")
+                    logger.info(f"USER SAID: '{final_text}'")
                     logger.info("=" * 80)
                     
                     # Trigger callback
@@ -185,11 +179,10 @@ class DeepgramService:
                     self.final_result = ""
                     self.speech_final = False
             else:
-                # Interim result
                 logger.debug(f"💬 Interim: '{text}'")
                     
         except Exception as e:
-            logger.error(f"❌ Error in transcript: {e}")
+            logger.error(f"❌ Transcript error: {e}")
             import traceback
             traceback.print_exc()
     
@@ -202,7 +195,7 @@ class DeepgramService:
     
     def _on_close(self, *args, **kwargs):
         """Connection closed"""
-        logger.info(f"Connection closed (sent {self.audio_sent_count} chunks)")
+        logger.info(f"Connection closed ({self.audio_sent_count} chunks sent)")
     
     async def send_audio(self, audio_chunk: bytes):
         """Send audio to Deepgram"""
@@ -211,36 +204,35 @@ class DeepgramService:
                 await self.dg_connection.send(audio_chunk)
                 self.audio_sent_count += 1
                 
-                # Log every 100 chunks
                 if self.audio_sent_count % 100 == 0:
-                    logger.info(f"📡 Sent {self.audio_sent_count} audio chunks")
+                    logger.info(f"📡 Sent {self.audio_sent_count} chunks")
                     
             except Exception as e:
-                if self.audio_sent_count < 5:  # Only log first few errors
-                    logger.error(f"❌ Error sending audio: {e}")
+                if self.audio_sent_count < 3:
+                    logger.error(f"❌ Send error: {e}")
     
     def send(self, payload: str):
-        """Send base64 encoded audio"""
+        """Send base64 audio"""
         if not self.dg_connection:
             if self.audio_sent_count == 0:
-                logger.error("❌ Cannot send - not connected!")
+                logger.error("❌ Not connected!")
             return
         
         try:
             audio_bytes = base64.b64decode(payload)
             asyncio.create_task(self.send_audio(audio_bytes))
         except Exception as e:
-            logger.error(f"❌ Error decoding audio: {e}")
+            logger.error(f"❌ Decode error: {e}")
     
     async def close(self):
         """Close connection"""
         if self.dg_connection:
             try:
-                logger.info(f"Closing connection (sent {self.audio_sent_count} chunks)")
+                logger.info(f"Closing ({self.audio_sent_count} chunks sent)")
                 await self.dg_connection.finish()
                 self.dg_connection = None
             except Exception as e:
-                logger.error(f"Error closing: {e}")
+                logger.error(f"Close error: {e}")
     
     def is_ready(self) -> bool:
         """Check if ready"""
@@ -259,16 +251,15 @@ class DeepgramManager:
         call_sid: str,
         on_speech_end_callback: TranscriptCallback
     ) -> DeepgramService:
-        """Create new connection"""
-        logger.info(f"Creating connection for: {call_sid}")
+        """Create connection"""
+        logger.info(f"Creating connection: {call_sid}")
         service = DeepgramService(on_speech_end_callback)
         self._connections[call_sid] = service
-        logger.info(f"✓ Service created")
         return service
     
     async def remove_connection(self, call_sid: str):
         """Remove connection"""
         if call_sid in self._connections:
-            logger.info(f"Removing connection: {call_sid}")
+            logger.info(f"Removing: {call_sid}")
             service = self._connections.pop(call_sid)
             await service.close()
