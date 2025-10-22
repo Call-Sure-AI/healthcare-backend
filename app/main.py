@@ -18,6 +18,8 @@ from app.services.deepgram_service import deepgram_manager
 from app.services.elevenlabs_service import elevenlabs_service  
 from app.services.redis_service import redis_service
 from app.config.voice_config import voice_config
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 
 Base.metadata.create_all(bind=engine)
 
@@ -77,14 +79,35 @@ origins = [
     "http://127.0.0.1:8080",
 ]
 
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=["*"],
+#     allow_credentials=True,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
+
 app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    TrustedHostMiddleware,
+    allowed_hosts=["*"]  # Allow all hosts for WebSocket compatibility
 )
 
+# Custom middleware to handle WebSocket headers
+class WebSocketMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        # Don't validate origin for WebSocket endpoints
+        if request.url.path == "/api/v1/voice/stream":
+            # Remove problematic headers
+            if "origin" in request.headers:
+                request.scope["headers"] = [
+                    (k, v) for k, v in request.scope["headers"] 
+                    if k.lower() != b"origin"
+                ]
+        
+        response = await call_next(request)
+        return response
+
+app.add_middleware(WebSocketMiddleware)
 
 """@app.middleware("http")
 async def log_requests(request: Request, call_next):
