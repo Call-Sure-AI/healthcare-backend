@@ -20,6 +20,7 @@ from app.schemas.call_session import CallSessionResponse, CallSessionDetail
 from app.services.elevenlabs_service import elevenlabs_service
 from app.services.deepgram_service import DeepgramService, DeepgramManager
 from starlette.websockets import WebSocketState
+from app.config.database import SessionLocal
 
 router = APIRouter(prefix="/voice", tags=["Voice Agent"])
 
@@ -251,7 +252,8 @@ async def websocket_stream(
         traceback.print_exc()
         return
     
-    db = next(get_db())
+    db = SessionLocal()
+    
     if not call_sid:
         await websocket.send_json({
             "error": "Missing call_sid parameter",
@@ -263,7 +265,7 @@ async def websocket_stream(
     print(f"=" * 80)
     print(f"WebSocket accepted for call_sid: {call_sid}")
     print(f"=" * 80)
-    
+
     print(f"=" * 80)
     print(f"1. WebSocket /stream endpoint hit")
     print(f"   Call SID: {call_sid}")
