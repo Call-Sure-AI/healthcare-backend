@@ -281,10 +281,11 @@ async def websocket_stream(websocket: WebSocket):
         try:
             deepgram_service = deepgram_manager.create_connection(
                 call_sid=call_sid,
-                on_transcription_callback=lambda transcript: asyncio.create_task(
+                on_speech_end_callback=lambda transcript: asyncio.create_task(
                     handle_full_transcript(call_sid, transcript, stream_service, tts_service)
                 )
             )
+
             
             if deepgram_service:
                 connected = await deepgram_service.connect()
