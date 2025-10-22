@@ -131,13 +131,10 @@ async def handle_incoming_call(
 
 
 @router.websocket("/stream")
-async def websocket_stream(
-    websocket: WebSocket,
-    call_sid: Optional[str] = Query(None)
-):
+async def websocket_stream(websocket: WebSocket):
     """Handle Twilio Media Stream WebSocket connection"""
     
-    # Step 1: Accept WebSocket connection FIRST
+    # Accept first
     try:
         logger.info("\n" + "=" * 80)
         logger.info("1. Accepting WebSocket...")
@@ -148,22 +145,30 @@ async def websocket_stream(
         traceback.print_exc()
         return
     
-    # Step 2: Validate call_sid
+    # Extract call_sid manually from query parameters
+    call_sid = websocket.query_params.get("call_sid")
+    
+    logger.info(f"2. Query parameters: {dict(websocket.query_params)}")
+    logger.info(f"   call_sid: {call_sid}")
+    
     if not call_sid:
-        logger.error("✗ Missing call_sid parameter")
+        logger.error("✗ Missing call_sid in query parameters")
         try:
-            await websocket.send_json({"error": "Missing call_sid parameter"})
+            await websocket.send_json({
+                "error": "Missing call_sid parameter",
+                "help": "Add ?call_sid=YOUR_CALL_SID to the URL"
+            })
             await websocket.close(code=1008)
         except:
             pass
         return
     
-    logger.info(f"2. Call SID validated: {call_sid}")
+    logger.info(f"3. Call SID validated: {call_sid}")
     
-    # Step 3: Initialize database session
+    # Continue with rest of your code...
     db = None
     try:
-        logger.info("3. Creating database session...")
+        logger.info("4. Creating database session...")
         db = SessionLocal()
         logger.info("✓ Database session created")
     except Exception as e:
