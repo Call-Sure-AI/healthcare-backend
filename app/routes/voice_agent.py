@@ -252,8 +252,6 @@ async def websocket_stream(
         traceback.print_exc()
         return
 
-    db_generator = get_db()
-    db = next(db_generator)
 
     if not call_sid:
         await websocket.send_json({
@@ -262,7 +260,7 @@ async def websocket_stream(
         })
         await websocket.close(code=1008, reason="Missing required parameter")
         return
-        
+
     print(f"=" * 80)
     print(f"WebSocket accepted for call_sid: {call_sid}")
     print(f"=" * 80)
@@ -287,6 +285,8 @@ async def websocket_stream(
     print(f"   Sec-WebSocket-Key: {websocket.headers.get('sec-websocket-key', 'MISSING')}")
     print(f"   Origin: {websocket.headers.get('origin', 'MISSING')}")
     print(f"   User-Agent: {websocket.headers.get('user-agent', 'MISSING')}")    
+
+    db = SessionLocal()
     try:
         # Initialize services
         print("\n6. Initializing Voice Agent Service...")
