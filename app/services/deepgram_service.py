@@ -38,22 +38,22 @@ class DeepgramService:
         logger.info(f"✓ API Key: {api_key[:10]}...{api_key[-4:]}")
         
         try:
-            # Set environment variable (SDK 5.x requires this)
+            # Set environment variable
             os.environ['DEEPGRAM_API_KEY'] = api_key
             logger.info("✓ Environment variable set")
             
-            # Import ONLY DeepgramClient (that's all that's available)
+            # Import DeepgramClient
             from deepgram import DeepgramClient
             
             logger.info("✓ Imported DeepgramClient")
             
-            # Create client (reads from environment)
+            # Create client
             client = DeepgramClient()
             logger.info("✓ DeepgramClient created")
             
-            # Get asynclive connection
-            self.dg_connection = client.listen.asynclive.v("1")
-            logger.info("✓ Got asynclive connection")
+            # Get asyncwebsocket connection (SDK 5.1.0 uses this instead of asynclive)
+            self.dg_connection = client.listen.asyncwebsocket.v("1")
+            logger.info("✓ Got asyncwebsocket connection")
             
             logger.info("=" * 80)
             logger.info("✓✓✓ DEEPGRAM INITIALIZED")
@@ -86,7 +86,7 @@ class DeepgramService:
             self.dg_connection.on("Close", self._on_close)
             logger.info("✓ Handlers registered")
             
-            # Create options as DICT (not LiveOptions object)
+            # Create options as dict
             options = {
                 'model': 'nova-2-phonecall',
                 'language': 'en-US',
@@ -120,7 +120,7 @@ class DeepgramService:
     def _on_open(self, *args, **kwargs):
         """WebSocket opened"""
         logger.info("=" * 80)
-        logger.info("🎤🎤🎤 WEBSOCKET OPENED!")
+        logger.info("🎤🎤🎤 DEEPGRAM CONNECTED!")
         logger.info("🎤🎤🎤 READY TO TRANSCRIBE!")
         logger.info("=" * 80)
     
@@ -185,7 +185,7 @@ class DeepgramService:
     
     def _on_close(self, *args, **kwargs):
         """Connection closed"""
-        logger.info(f"Connection closed ({self.audio_sent_count} chunks)")
+        logger.info(f"Connection closed ({self.audio_sent_count} chunks sent)")
     
     async def send_audio(self, audio_chunk: bytes):
         """Send audio to Deepgram"""
@@ -195,7 +195,7 @@ class DeepgramService:
                 self.audio_sent_count += 1
                 
                 if self.audio_sent_count % 100 == 0:
-                    logger.info(f"📡 Sent {self.audio_sent_count} chunks")
+                    logger.info(f"📡 Sent {self.audio_sent_count} audio chunks")
                     
             except Exception as e:
                 if self.audio_sent_count < 3:
@@ -218,9 +218,10 @@ class DeepgramService:
         """Close connection"""
         if self.dg_connection:
             try:
-                logger.info(f"Closing ({self.audio_sent_count} chunks)")
+                logger.info(f"Closing connection ({self.audio_sent_count} chunks sent)")
                 await self.dg_connection.finish()
                 self.dg_connection = None
+                logger.info("✓ Connection closed")
             except Exception as e:
                 logger.error(f"Close error: {e}")
     
@@ -245,11 +246,13 @@ class DeepgramManager:
         logger.info(f"Creating connection: {call_sid}")
         service = DeepgramService(on_speech_end_callback)
         self._connections[call_sid] = service
+        logger.info(f"✓ Service created for {call_sid}")
         return service
     
     async def remove_connection(self, call_sid: str):
         """Remove connection"""
         if call_sid in self._connections:
-            logger.info(f"Removing: {call_sid}")
+            logger.info(f"Removing connection: {call_sid}")
             service = self._connections.pop(call_sid)
             await service.close()
+            logger.info(f"✓ Connection removed: {call_sid}")
