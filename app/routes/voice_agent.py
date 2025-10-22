@@ -134,7 +134,7 @@ async def handle_incoming_call(
 async def websocket_stream(websocket: WebSocket):
     """Handle Twilio Media Stream WebSocket connection"""
     
-    # Accept first
+    # Step 1: Accept WebSocket connection
     try:
         logger.info("\n" + "=" * 80)
         logger.info("1. Accepting WebSocket...")
@@ -145,18 +145,54 @@ async def websocket_stream(websocket: WebSocket):
         traceback.print_exc()
         return
     
-    # Extract call_sid manually from query parameters
+    # Step 2: Try to get call_sid from query params (might be empty due to proxy)
     call_sid = websocket.query_params.get("call_sid")
-    
     logger.info(f"2. Query parameters: {dict(websocket.query_params)}")
-    logger.info(f"   call_sid: {call_sid}")
     
+    # Step 3: If no query params, wait for Twilio's 'start' event
+    first_message_data = None
     if not call_sid:
-        logger.error("✗ Missing call_sid in query parameters")
+        logger.warning("⚠ No call_sid in query params, waiting for Twilio start event...")
+        
+        try:
+            # Wait for first message (Twilio always sends 'start' first)
+            first_message = await asyncio.wait_for(
+                websocket.receive_text(),
+                timeout=10.0
+            )
+            first_message_data = json.loads(first_message)
+            
+            if first_message_data.get("event") == "start":
+                # Extract call_sid from start event
+                call_sid = first_message_data.get("start", {}).get("callSid")
+                logger.info(f"✓ Extracted call_sid from start event: {call_sid}")
+            else:
+                logger.error(f"✗ First message was not 'start' event: {first_message_data.get('event')}")
+            
+        except asyncio.TimeoutError:
+            logger.error("✗ Timeout waiting for start event (10s)")
+            try:
+                await websocket.send_json({"error": "Timeout waiting for start event"})
+                await websocket.close(code=1008)
+            except:
+                pass
+            return
+        except Exception as e:
+            logger.error(f"✗ Error receiving first message: {e}")
+            traceback.print_exc()
+            try:
+                await websocket.close(code=1011)
+            except:
+                pass
+            return
+    
+    # Step 4: Validate we have call_sid
+    if not call_sid:
+        logger.error("✗ Could not obtain call_sid from query params or start event")
         try:
             await websocket.send_json({
-                "error": "Missing call_sid parameter",
-                "help": "Add ?call_sid=YOUR_CALL_SID to the URL"
+                "error": "Missing call_sid",
+                "query_params": dict(websocket.query_params)
             })
             await websocket.close(code=1008)
         except:
@@ -165,7 +201,7 @@ async def websocket_stream(websocket: WebSocket):
     
     logger.info(f"3. Call SID validated: {call_sid}")
     
-    # Continue with rest of your code...
+    # Step 5: Initialize database session
     db = None
     try:
         logger.info("4. Creating database session...")
@@ -181,7 +217,7 @@ async def websocket_stream(websocket: WebSocket):
             pass
         return
     
-    # Step 4: Initialize services
+    # Step 6: Initialize services
     stream_service = None
     tts_service = None
     deepgram_manager = None
@@ -189,26 +225,26 @@ async def websocket_stream(websocket: WebSocket):
     deepgram_service = None
     
     try:
-        logger.info("4. Initializing StreamService...")
+        logger.info("5. Initializing StreamService...")
         stream_service = StreamService(websocket)
         logger.info("✓ StreamService initialized")
         
-        logger.info("5. Initializing TTSService...")
+        logger.info("6. Initializing TTSService...")
         tts_service = TTSService()
         logger.info("✓ TTSService initialized")
         
-        logger.info("6. Initializing DeepgramManager...")
+        logger.info("7. Initializing DeepgramManager...")
         deepgram_manager = DeepgramManager()
         logger.info("✓ DeepgramManager initialized")
         
         # Initialize Voice Agent
-        logger.info("7. Initializing VoiceAgentService...")
+        logger.info("8. Initializing VoiceAgentService...")
         agent = VoiceAgentService(db)
         await agent.initiate_call(call_sid, "WebSocket", "WebSocket")
         logger.info("✓ VoiceAgentService initialized")
         
         # Initialize Deepgram STT
-        logger.info("8. Initializing Deepgram STT...")
+        logger.info("9. Initializing Deepgram STT...")
         try:
             deepgram_service = deepgram_manager.create_connection(
                 call_sid=call_sid,
@@ -230,7 +266,7 @@ async def websocket_stream(websocket: WebSocket):
             deepgram_service = None
         
         # Store context
-        logger.info("9. Storing context...")
+        logger.info("10. Storing context...")
         call_context[call_sid] = {
             "websocket": websocket,
             "agent": agent,
@@ -240,13 +276,41 @@ async def websocket_stream(websocket: WebSocket):
         }
         logger.info("✓ Context stored")
         
-        logger.info("10. Entering message loop...")
+        logger.info("11. Entering message loop...")
         logger.info("=" * 80)
         
         has_sent_greeting = False
         message_count = 0
         
-        # Main message loop - THIS KEEPS THE CONNECTION ALIVE
+        # If we already received the 'start' event while getting call_sid, process it
+        if first_message_data and first_message_data.get("event") == "start":
+            logger.info("Processing buffered start event...")
+            stream_sid = first_message_data.get("streamSid")
+            stream_service.set_stream_sid(stream_sid)
+            
+            logger.info(f"🚀 Stream started: {stream_sid}")
+            
+            # Update Redis
+            redis_service.update_session(call_sid, {"stream_sid": stream_sid})
+            
+            # Send greeting
+            greeting_text = f"Thank you for calling {voice_config.CLINIC_NAME}! How can I help you today?"
+            logger.info(f"💬 Sending greeting: '{greeting_text}'")
+            
+            try:
+                async for audio_b64 in tts_service.generate(greeting_text):
+                    if audio_b64:
+                        await stream_service.buffer(None, audio_b64)
+                
+                logger.info("✓ Greeting sent")
+                has_sent_greeting = True
+            except Exception as e:
+                logger.error(f"✗ Error sending greeting: {e}")
+                traceback.print_exc()
+            
+            message_count = 1
+        
+        # Main message loop
         while True:
             try:
                 message = await websocket.receive_text()
@@ -260,16 +324,17 @@ async def websocket_stream(websocket: WebSocket):
                     logger.info(f"📊 Processed {message_count} messages")
                 
                 if event == "start":
-                    stream_sid = data.get("streamSid")
-                    stream_service.set_stream_sid(stream_sid)
-                    
-                    logger.info(f"\n🚀 Stream started: {stream_sid}")
-                    
-                    # Update Redis
-                    redis_service.update_session(call_sid, {"stream_sid": stream_sid})
-                    
-                    # Send greeting
+                    # If we haven't processed start yet
                     if not has_sent_greeting:
+                        stream_sid = data.get("streamSid")
+                        stream_service.set_stream_sid(stream_sid)
+                        
+                        logger.info(f"\n🚀 Stream started: {stream_sid}")
+                        
+                        # Update Redis
+                        redis_service.update_session(call_sid, {"stream_sid": stream_sid})
+                        
+                        # Send greeting
                         greeting_text = f"Thank you for calling {voice_config.CLINIC_NAME}! How can I help you today?"
                         logger.info(f"💬 Sending greeting: '{greeting_text}'")
                         
@@ -305,7 +370,8 @@ async def websocket_stream(websocket: WebSocket):
                     logger.info("\n🛑 Stop event received")
                     break
                 else:
-                    logger.info(f"⚠ Unknown event: {event}")
+                    if message_count % 100 == 0:
+                        logger.info(f"⚠ Unknown event: {event}")
                     
             except WebSocketDisconnect:
                 logger.info("\n✓ Client disconnected")
@@ -352,7 +418,8 @@ async def websocket_stream(websocket: WebSocket):
                 logger.error(f"✗ Database close error: {e}")
         
         try:
-            if websocket.client_state.value == 1:  # CONNECTED state
+            from starlette.websockets import WebSocketState
+            if websocket.client_state == WebSocketState.CONNECTED:
                 await websocket.close()
                 logger.info("✓ WebSocket closed")
         except Exception as e:
