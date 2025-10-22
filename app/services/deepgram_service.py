@@ -42,19 +42,17 @@ class DeepgramService:
             os.environ['DEEPGRAM_API_KEY'] = api_key
             logger.info("✓ Environment variable set")
             
-            # Import DeepgramClient
-            from deepgram import DeepgramClient
+            # Import AsyncDeepgramClient for SDK 5.1.0
+            from deepgram import AsyncDeepgramClient
             
-            logger.info("✓ Imported DeepgramClient")
+            logger.info("✓ Imported AsyncDeepgramClient")
             
-            # Create client
-            client = DeepgramClient()
-            logger.info("✓ DeepgramClient created")
+            # Create async client
+            self.client = AsyncDeepgramClient()
+            logger.info("✓ AsyncDeepgramClient created")
             
-            # SDK 5.1.0 uses: client.listen.v1.websocket()
-            logger.info("Getting v1.websocket connection...")
-            self.dg_connection = client.listen.v1.websocket()
-            logger.info("✓ Got websocket connection")
+            # Store for use in connect()
+            self.initialized = True
             
             logger.info("=" * 80)
             logger.info("✓✓✓ DEEPGRAM INITIALIZED")
@@ -66,47 +64,60 @@ class DeepgramService:
             logger.error("=" * 80)
             import traceback
             traceback.print_exc()
-            self.dg_connection = None
+            self.initialized = False
     
     async def connect(self) -> bool:
-        """Start Deepgram connection"""
-        if not self.dg_connection:
-            logger.error("❌ No connection - init failed")
+        """Start Deepgram connection using v2.connect()"""
+        if not hasattr(self, 'initialized') or not self.initialized:
+            logger.error("❌ Client not initialized")
             return False
         
         try:
             logger.info("=" * 80)
-            logger.info("STARTING CONNECTION")
+            logger.info("CONNECTING TO DEEPGRAM")
             logger.info("=" * 80)
+            
+            # Use async context manager with v2.connect() (SDK 5.1.0)
+            logger.info("Creating v2 connection...")
+            
+            self.dg_connection = await self.client.listen.v2.connect(
+                model="nova-2-phonecall",
+                language="en-US",
+                encoding="mulaw",
+                sample_rate=8000,
+                punctuate=True,
+                interim_results=True,
+                endpointing=300,
+                utterance_end_ms=1200,
+            )
+            
+            logger.info("✓ Connection created")
             
             # Register event handlers
-            logger.info("Registering handlers...")
-            self.dg_connection.on("Open", self._on_open)
-            self.dg_connection.on("Transcript", self._on_transcript)
-            self.dg_connection.on("Error", self._on_error)
-            self.dg_connection.on("Close", self._on_close)
-            logger.info("✓ Handlers registered")
+            logger.info("Registering event handlers...")
             
-            # Create options as dict
-            options = {
-                'model': 'nova-2-phonecall',
-                'language': 'en-US',
-                'encoding': 'mulaw',
-                'sample_rate': 8000,
-                'punctuate': True,
-                'interim_results': True,
-                'endpointing': 300,
-                'utterance_end_ms': '1200',
-            }
+            # SDK 5.1.0 uses EventType enum
+            try:
+                from deepgram import EventType
+                self.dg_connection.on(EventType.OPEN, self._on_open)
+                self.dg_connection.on(EventType.MESSAGE, self._on_transcript)
+                self.dg_connection.on(EventType.ERROR, self._on_error)
+                self.dg_connection.on(EventType.CLOSE, self._on_close)
+                logger.info("✓ Handlers registered with EventType")
+            except ImportError:
+                # Fallback to string names
+                self.dg_connection.on("Open", self._on_open)
+                self.dg_connection.on("Message", self._on_transcript)
+                self.dg_connection.on("Error", self._on_error)
+                self.dg_connection.on("Close", self._on_close)
+                logger.info("✓ Handlers registered with strings")
             
-            logger.info(f"✓ Options: {options['model']}, {options['encoding']}, {options['sample_rate']}Hz")
-            
-            # Start connection
-            logger.info("Calling start()...")
-            result = await self.dg_connection.start(options)
+            # Start listening
+            logger.info("Starting listening...")
+            await self.dg_connection.start_listening()
             
             logger.info("=" * 80)
-            logger.info(f"✓✓✓ CONNECTED: {result}")
+            logger.info("✓✓✓ CONNECTED AND LISTENING!")
             logger.info("=" * 80)
             return True
             
@@ -122,15 +133,23 @@ class DeepgramService:
         """WebSocket opened"""
         logger.info("=" * 80)
         logger.info("🎤🎤🎤 DEEPGRAM CONNECTED!")
-        logger.info("🎤🎤🎤 LISTENING FOR SPEECH!")
         logger.info("=" * 80)
     
     def _on_transcript(self, *args, **kwargs):
-        """Handle transcription"""
+        """Handle transcription (called on MESSAGE event)"""
         try:
-            result = kwargs.get('result')
-            if not result:
+            # Get message
+            message = kwargs.get('message') or (args[0] if args else None)
+            if not message:
                 return
+            
+            # Check message type
+            message_type = getattr(message, 'type', None)
+            if message_type != 'Results':
+                return
+            
+            # Get result
+            result = getattr(message, 'result', None) if hasattr(message, 'result') else message
             
             # Extract text
             text = ''
@@ -150,7 +169,7 @@ class DeepgramService:
                 
                 logger.info("─" * 80)
                 logger.info(f"📝 FINAL: '{text}'")
-                logger.info(f"📝 ACCUMULATED: '{self.final_result.strip()}'")
+                logger.info(f"📝 TOTAL: '{self.final_result.strip()}'")
                 logger.info("─" * 80)
                 
                 # Check speech_final
@@ -181,7 +200,7 @@ class DeepgramService:
         """Handle errors"""
         error = kwargs.get('error') or (args[0] if args else 'Unknown')
         logger.error("=" * 80)
-        logger.error(f"❌❌❌ DEEPGRAM ERROR: {error}")
+        logger.error(f"❌❌❌ ERROR: {error}")
         logger.error("=" * 80)
     
     def _on_close(self, *args, **kwargs):
@@ -196,7 +215,7 @@ class DeepgramService:
                 self.audio_sent_count += 1
                 
                 if self.audio_sent_count % 100 == 0:
-                    logger.info(f"📡 Sent {self.audio_sent_count} audio chunks")
+                    logger.info(f"📡 Sent {self.audio_sent_count} chunks")
                     
             except Exception as e:
                 if self.audio_sent_count < 3:
@@ -219,10 +238,9 @@ class DeepgramService:
         """Close connection"""
         if self.dg_connection:
             try:
-                logger.info(f"Closing connection ({self.audio_sent_count} chunks sent)")
+                logger.info(f"Closing ({self.audio_sent_count} chunks)")
                 await self.dg_connection.finish()
                 self.dg_connection = None
-                logger.info("✓ Connection closed")
             except Exception as e:
                 logger.error(f"Close error: {e}")
     
@@ -247,13 +265,11 @@ class DeepgramManager:
         logger.info(f"Creating connection: {call_sid}")
         service = DeepgramService(on_speech_end_callback)
         self._connections[call_sid] = service
-        logger.info(f"✓ Service created for {call_sid}")
         return service
     
     async def remove_connection(self, call_sid: str):
         """Remove connection"""
         if call_sid in self._connections:
-            logger.info(f"Removing connection: {call_sid}")
+            logger.info(f"Removing: {call_sid}")
             service = self._connections.pop(call_sid)
             await service.close()
-            logger.info(f"✓ Connection removed: {call_sid}")
