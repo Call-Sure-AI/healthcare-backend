@@ -238,47 +238,93 @@ async def websocket_stream(
     websocket: WebSocket,
     call_sid: str = Query(...),
 ):
-    print(f"--> /stream endpoint hit for call_sid: {call_sid}")
+    print(f"=" * 80)
+    print(f"1. WebSocket /stream endpoint hit")
+    print(f"   Call SID: {call_sid}")
+    print(f"   Client: {websocket.client}")
+    print(f"   URL: {websocket.url}")
+    print(f"=" * 80)
     
-    # Accept WebSocket without origin validation for Twilio
+    # Log all headers
+    print("2. Request Headers:")
+    for key, value in websocket.headers.items():
+        print(f"   {key}: {value}")
+    
+    # Check WebSocket specific headers
+    print("\n3. WebSocket Upgrade Headers:")
+    print(f"   Connection: {websocket.headers.get('connection', 'MISSING')}")
+    print(f"   Upgrade: {websocket.headers.get('upgrade', 'MISSING')}")
+    print(f"   Sec-WebSocket-Version: {websocket.headers.get('sec-websocket-version', 'MISSING')}")
+    print(f"   Sec-WebSocket-Key: {websocket.headers.get('sec-websocket-key', 'MISSING')}")
+    print(f"   Origin: {websocket.headers.get('origin', 'MISSING')}")
+    print(f"   User-Agent: {websocket.headers.get('user-agent', 'MISSING')}")
+    
+    # Accept WebSocket
     try:
-        # Force accept the WebSocket connection
-        await websocket.accept(
-            subprotocol=None,
-            headers={}  # Don't send additional headers that might cause issues
-        )
-        print(f"WebSocket accepted for {call_sid}")
+        print("\n4. Attempting to accept WebSocket connection...")
+        await websocket.accept()
+        print("5. ✓ WebSocket accepted successfully!")
     except Exception as e:
-        print(f"Failed to accept WebSocket: {e}")
+        print(f"5. ✗ Failed to accept WebSocket: {e}")
+        print(f"   Exception type: {type(e).__name__}")
+        import traceback
+        traceback.print_exc()
         return
     
     db = next(get_db())
     
     try:
+        # Initialize services
+        print("\n6. Initializing Voice Agent Service...")
         agent = VoiceAgentService(db)
         await agent.initiate_call(call_sid, "WebSocket", "WebSocket")
-
+        print("   ✓ Voice Agent initialized")
+        
         stream_sid = None
-
-        # Initialize Deepgram
+        deepgram_service = None
+        
+        # Initialize Deepgram with better error handling
+        print("\n7. Initializing Deepgram STT Service...")
         try:
-            deepgram_service = deepgram_manager.create_connection(
-                call_sid=call_sid,
-                on_speech_end_callback=lambda transcript: handle_full_transcript(call_sid, transcript)
-            )
+            # Check if Deepgram credentials are configured
+            if not hasattr(deepgram_manager, 'create_connection'):
+                print("   ✗ Deepgram manager not properly initialized")
+                deepgram_service = None
+            else:
+                deepgram_service = deepgram_manager.create_connection(
+                    call_sid=call_sid,
+                    on_speech_end_callback=lambda transcript: asyncio.create_task(
+                        handle_full_transcript(call_sid, transcript)
+                    )
+                )
+                print("   ✓ Deepgram connection object created")
+                
+                if deepgram_service:
+                    connected = await deepgram_service.connect()
+                    if connected:
+                        print("   ✓ Deepgram connected successfully")
+                    else:
+                        print("   ✗ Deepgram connection failed")
+                        deepgram_service = None
         except Exception as e:
-            print(f"Deepgram initialization error: {e}")
+            print(f"   ✗ Deepgram initialization error: {e}")
+            print(f"      Error type: {type(e).__name__}")
             deepgram_service = None
         
-        if deepgram_service and not await deepgram_service.connect():
-            print(f"Failed to connect to Deepgram for {call_sid}")
+        # If this is a test connection without Deepgram requirement, continue
+        if call_sid == "test123":
+            print("\n8. Test connection detected, skipping Deepgram requirement")
+        elif not deepgram_service:
+            print("\n8. Deepgram required but not available, closing connection")
+            await websocket.send_json({
+                "error": "STT service unavailable",
+                "message": "Could not initialize speech-to-text service"
+            })
             await websocket.close(code=1011, reason="STT connection failed")
             await agent.end_call(call_sid)
-            if deepgram_service:
-                await deepgram_manager.remove_connection(call_sid)
             db.close()
             return
-
+        
         # Store context
         call_context[call_sid] = {
             "websocket": websocket,
@@ -286,84 +332,123 @@ async def websocket_stream(
             "deepgram": deepgram_service,
             "stream_sid": None
         }
-
+        print("\n9. Context stored, ready to receive messages")
+        
         has_sent_greeting = False
-
+        message_count = 0
+        
+        # Main message loop
+        print("\n10. Entering main message loop...")
+        print("=" * 80)
+        
         while True:
             try:
                 message = await websocket.receive_text()
+                message_count += 1
+                
                 data = json.loads(message)
                 event = data.get("event")
-
+                
+                print(f"\n[Message {message_count}] Event: {event}")
+                
                 if event == "start":
                     stream_sid = data.get("streamSid")
-                    print(f"Twilio stream started: {stream_sid} for call {call_sid}")
+                    start_data = data.get("start", {})
+                    print(f"   Stream SID: {stream_sid}")
+                    print(f"   Account SID: {start_data.get('accountSid', 'N/A')}")
+                    print(f"   Call SID: {start_data.get('callSid', 'N/A')}")
+                    print(f"   Media Format: {start_data.get('mediaFormat', {})}")
+                    
                     call_context[call_sid]["stream_sid"] = stream_sid
                     redis_service.update_session(call_sid, {"stream_sid": stream_sid})
-
+                    
                     if not has_sent_greeting:
                         greeting_text = f"Thank you for calling {voice_config.CLINIC_NAME}! How can I help you today?"
-                        print(f"Sending initial greeting for {call_sid}")
+                        print(f"   Sending greeting: '{greeting_text}'")
                         
                         try:
                             async for audio_chunk in elevenlabs_service.generate_audio_stream(greeting_text):
                                 if audio_chunk:
                                     await send_twilio_media(websocket, stream_sid, audio_chunk)
+                            print("   ✓ Greeting sent successfully")
                         except Exception as e:
-                            print(f"Error streaming greeting: {e}")
+                            print(f"   ✗ Error sending greeting: {e}")
                         
                         await send_twilio_mark(websocket, stream_sid, "agent_finished_speaking")
                         has_sent_greeting = True
-                        print(f"Finished sending initial greeting for {call_sid}")
-
+                
                 elif event == "media":
+                    # Don't log every media event (too many)
+                    if message_count % 50 == 0:  # Log every 50th media message
+                        print(f"   Received {message_count} media messages...")
+                    
                     payload = data.get("media", {}).get("payload")
                     if payload and deepgram_service:
                         audio_chunk = base64.b64decode(payload)
                         await deepgram_service.send_audio(audio_chunk)
-
+                
                 elif event == "mark":
                     mark_name = data.get("mark", {}).get("name")
-                    if mark_name == "agent_finished_speaking":
-                        print(f"Twilio acknowledged agent finished speaking for {call_sid}")
-
+                    print(f"   Mark received: {mark_name}")
+                
                 elif event == "stop":
-                    print(f"Twilio stream stopped for call: {call_sid}")
+                    print(f"   Stop event received, closing connection")
                     break
+                
+                else:
+                    print(f"   Unknown event: {event}")
+                    print(f"   Data: {json.dumps(data, indent=2)}")
                     
             except WebSocketDisconnect:
-                print(f"WebSocket disconnected for call: {call_sid}")
+                print(f"\n✓ WebSocket disconnected by client")
                 break
             except json.JSONDecodeError as e:
-                print(f"JSON decode error: {e}")
+                print(f"\n✗ JSON decode error: {e}")
                 continue
             except Exception as e:
-                print(f"Error in WebSocket loop: {e}")
+                print(f"\n✗ Error in message loop: {e}")
+                print(f"   Error type: {type(e).__name__}")
+                import traceback
+                traceback.print_exc()
                 continue
-
+    
     except Exception as e:
-        print(f"WebSocket error for {call_sid}: {e}")
+        print(f"\n✗ Fatal error in WebSocket handler: {e}")
         import traceback
         traceback.print_exc()
+    
     finally:
-        print(f"Cleaning up for call: {call_sid}")
+        print(f"\n" + "=" * 80)
+        print("Cleaning up connection...")
         
         if 'deepgram_service' in locals() and deepgram_service:
-            await deepgram_manager.remove_connection(call_sid)
+            try:
+                await deepgram_manager.remove_connection(call_sid)
+                print("   ✓ Deepgram cleaned up")
+            except:
+                print("   ✗ Error cleaning up Deepgram")
         
         call_context.pop(call_sid, None)
+        print("   ✓ Context cleared")
         
         if 'agent' in locals():
-            await agent.end_call(call_sid)
+            try:
+                await agent.end_call(call_sid)
+                print("   ✓ Call ended")
+            except:
+                print("   ✗ Error ending call")
         
         db.close()
+        print("   ✓ Database closed")
         
         try:
             await websocket.close()
+            print("   ✓ WebSocket closed")
         except:
-            pass
+            pass  # Already closed
         
-        print(f"Cleanup complete for {call_sid}")
+        print(f"✓ Cleanup complete for call {call_sid}")
+        print("=" * 80)
 
 async def process_audio_buffer(
     call_sid: str,

@@ -20,6 +20,8 @@ from app.services.redis_service import redis_service
 from app.config.voice_config import voice_config
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
+import logging
+logging.basicConfig(level=logging.DEBUG)
 
 Base.metadata.create_all(bind=engine)
 
@@ -91,7 +93,20 @@ app.add_middleware(
     TrustedHostMiddleware,
     allowed_hosts=["*"]  # Allow all hosts for WebSocket compatibility
 )
-
+# Add a middleware to log all requests
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    print(f"Request path: {request.url.path}")
+    print(f"Request headers: {dict(request.headers)}")
+    print(f"Request client: {request.client}")
+    
+    if "upgrade" in request.headers.get("connection", "").lower():
+        print("WebSocket upgrade detected!")
+        print(f"Origin header: {request.headers.get('origin', 'NO ORIGIN')}")
+        print(f"Host header: {request.headers.get('host', 'NO HOST')}")
+    
+    response = await call_next(request)
+    return response
 # Custom middleware to handle WebSocket headers
 class WebSocketMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
