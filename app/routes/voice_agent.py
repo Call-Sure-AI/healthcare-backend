@@ -236,8 +236,34 @@ async def handle_incoming_call(
 @router.websocket("/stream")
 async def websocket_stream(
     websocket: WebSocket,
-    call_sid: str = Query(...),
+    call_sid: Optional[str] = Query(None)
 ):
+    
+    # Accept WebSocket
+    try:
+        print("\n4. Attempting to accept WebSocket connection...")
+        await websocket.accept()
+        print("5. ✓ WebSocket accepted successfully!")
+    except Exception as e:
+        print(f"5. ✗ Failed to accept WebSocket: {e}")
+        print(f"   Exception type: {type(e).__name__}")
+        import traceback
+        traceback.print_exc()
+        return
+    
+    db = next(get_db())
+    if not call_sid:
+        await websocket.send_json({
+            "error": "Missing call_sid parameter",
+            "message": "call_sid query parameter is required"
+        })
+        await websocket.close(code=1008, reason="Missing required parameter")
+        return
+    
+    print(f"=" * 80)
+    print(f"WebSocket accepted for call_sid: {call_sid}")
+    print(f"=" * 80)
+    
     print(f"=" * 80)
     print(f"1. WebSocket /stream endpoint hit")
     print(f"   Call SID: {call_sid}")
@@ -257,22 +283,7 @@ async def websocket_stream(
     print(f"   Sec-WebSocket-Version: {websocket.headers.get('sec-websocket-version', 'MISSING')}")
     print(f"   Sec-WebSocket-Key: {websocket.headers.get('sec-websocket-key', 'MISSING')}")
     print(f"   Origin: {websocket.headers.get('origin', 'MISSING')}")
-    print(f"   User-Agent: {websocket.headers.get('user-agent', 'MISSING')}")
-    
-    # Accept WebSocket
-    try:
-        print("\n4. Attempting to accept WebSocket connection...")
-        await websocket.accept()
-        print("5. ✓ WebSocket accepted successfully!")
-    except Exception as e:
-        print(f"5. ✗ Failed to accept WebSocket: {e}")
-        print(f"   Exception type: {type(e).__name__}")
-        import traceback
-        traceback.print_exc()
-        return
-    
-    db = next(get_db())
-    
+    print(f"   User-Agent: {websocket.headers.get('user-agent', 'MISSING')}")    
     try:
         # Initialize services
         print("\n6. Initializing Voice Agent Service...")
