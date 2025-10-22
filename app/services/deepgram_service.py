@@ -77,26 +77,30 @@ class DeepgramService:
             logger.info("CONNECTING TO DEEPGRAM")
             logger.info("=" * 80)
             
-            # Use async context manager with v2.connect() (SDK 5.1.0)
+            # SDK 5.1.0: Pass options as a single dict
+            options = {
+                'model': 'nova-2-phonecall',
+                'language': 'en-US',
+                'encoding': 'mulaw',
+                'sample_rate': 8000,
+                'punctuate': True,
+                'interim_results': True,
+                'endpointing': 300,
+                'utterance_end_ms': 1200,
+            }
+            
+            logger.info(f"✓ Options: {options['model']}, {options['encoding']}, {options['sample_rate']}Hz")
             logger.info("Creating v2 connection...")
             
-            self.dg_connection = await self.client.listen.v2.connect(
-                model="nova-2-phonecall",
-                language="en-US",
-                encoding="mulaw",
-                sample_rate=8000,
-                punctuate=True,
-                interim_results=True,
-                endpointing=300,
-                utterance_end_ms=1200,
-            )
+            # Pass options as dict to connect()
+            self.dg_connection = await self.client.listen.v2.connect(options)
             
             logger.info("✓ Connection created")
             
             # Register event handlers
             logger.info("Registering event handlers...")
             
-            # SDK 5.1.0 uses EventType enum
+            # Try EventType enum first
             try:
                 from deepgram import EventType
                 self.dg_connection.on(EventType.OPEN, self._on_open)
