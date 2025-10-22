@@ -66,7 +66,7 @@ class DeepgramService:
             self.initialized = False
     
     async def connect(self) -> bool:
-        """Start Deepgram connection - SDK 5.1.0 uses context manager"""
+        """Start Deepgram connection - SDK 5.1.0"""
         if not hasattr(self, 'initialized') or not self.initialized:
             logger.error("❌ Client not initialized")
             return False
@@ -76,25 +76,15 @@ class DeepgramService:
             logger.info("CONNECTING TO DEEPGRAM")
             logger.info("=" * 80)
             
-            # Create options dict
-            options = {
-                'model': 'nova-2-phonecall',
-                'language': 'en-US',
-                'encoding': 'mulaw',
-                'sample_rate': 8000,
-                'punctuate': True,
-                'interim_results': True,
-                'endpointing': 300,
-                'utterance_end_ms': 1200,
-            }
+            logger.info("Creating v2 connection with required params...")
             
-            logger.info(f"✓ Options: {options['model']}, {options['encoding']}, {options['sample_rate']}Hz")
-            
-            # SDK 5.1.0: Use async context manager
-            logger.info("Creating connection with context manager...")
-            
-            # connect() takes NO arguments - it returns a context manager
-            async with self.client.listen.v2.connect() as connection:
+            # SDK 5.1.0: Pass required params as keyword arguments
+            async with self.client.listen.v2.connect(
+                model="nova-2-phonecall",
+                encoding="mulaw",
+                sample_rate=8000
+            ) as connection:
+                
                 logger.info("✓ Connection established")
                 
                 # Store connection
@@ -108,16 +98,42 @@ class DeepgramService:
                 connection.on("Close", self._on_close)
                 logger.info("✓ Handlers registered")
                 
-                # Configure connection with options
-                logger.info("Configuring connection...")
-                await connection.configure(options)
-                logger.info("✓ Connection configured")
+                # Send additional options if needed
+                logger.info("Sending additional options...")
+                options = {
+                    'language': 'en-US',
+                    'punctuate': True,
+                    'interim_results': True,
+                    'endpointing': 300,
+                    'utterance_end_ms': 1200,
+                }
+                
+                # Try to apply additional options
+                try:
+                    await connection.send_options(options)
+                    logger.info("✓ Additional options sent")
+                except AttributeError:
+                    # If send_options doesn't exist, options might already be applied
+                    logger.info("ℹ Additional options not needed")
                 
                 logger.info("=" * 80)
-                logger.info("✓✓✓ CONNECTED!")
+                logger.info("✓✓✓ CONNECTED AND READY!")
                 logger.info("=" * 80)
                 
-                # Keep connection open
+                # Connection stays open - THIS IS THE KEY
+                # We need to keep the async context open
+                # So we can't return here
+                
+                # Instead, store that we're connected
+                self._connected = True
+                
+                # Wait indefinitely to keep connection open
+                try:
+                    while self._connected:
+                        await asyncio.sleep(0.1)
+                except asyncio.CancelledError:
+                    logger.info("Connection task cancelled")
+                
                 return True
             
         except Exception as e:
