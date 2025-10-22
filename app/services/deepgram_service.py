@@ -1,10 +1,6 @@
 import asyncio
 from typing import Dict, Callable, Awaitable
-from deepgram import (
-    DeepgramClient,
-    LiveTranscriptionEvents,  # ADD THIS
-    LiveOptions               # ADD THIS
-)
+from deepgram import DeepgramClient
 from app.config.voice_config import voice_config
 
 # Type hint for the callback function
