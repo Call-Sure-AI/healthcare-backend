@@ -251,9 +251,10 @@ async def websocket_stream(
         import traceback
         traceback.print_exc()
         return
-    
-    db = SessionLocal()
-    
+
+    db_generator = get_db()
+    db = next(db_generator)
+
     if not call_sid:
         await websocket.send_json({
             "error": "Missing call_sid parameter",
@@ -261,7 +262,7 @@ async def websocket_stream(
         })
         await websocket.close(code=1008, reason="Missing required parameter")
         return
-    
+        
     print(f"=" * 80)
     print(f"WebSocket accepted for call_sid: {call_sid}")
     print(f"=" * 80)
