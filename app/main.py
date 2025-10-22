@@ -14,7 +14,7 @@ from fastapi import WebSocket, Query
 from typing import Dict, Any
 import base64
 from app.services.voice_agent_service import VoiceAgentService
-from app.services.deepgram_service import deepgram_manager
+from app.services.deepgram_service import DeepgramManager
 from app.services.elevenlabs_service import elevenlabs_service  
 from app.services.redis_service import redis_service
 from app.config.voice_config import voice_config

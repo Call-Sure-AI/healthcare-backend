@@ -18,7 +18,7 @@ from app.services.redis_service import redis_service
 from app.models.call_session import CallSession
 from app.schemas.call_session import CallSessionResponse, CallSessionDetail
 from app.services.elevenlabs_service import elevenlabs_service
-from app.services.deepgram_service import DeepgramService, deepgram_manager
+from app.services.deepgram_service import DeepgramService, DeepgramManager
 from starlette.websockets import WebSocketState
 
 router = APIRouter(prefix="/voice", tags=["Voice Agent"])
@@ -281,7 +281,7 @@ async def websocket_stream(
         print("   ✓ Voice Agent initialized")
         
         stream_sid = None
-        deepgram_service = None
+        deepgram_manager = DeepgramManager()
         
         # Initialize Deepgram with better error handling
         print("\n7. Initializing Deepgram STT Service...")
