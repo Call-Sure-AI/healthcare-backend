@@ -131,7 +131,10 @@ async def handle_incoming_call(
 
 
 @router.websocket("/stream")
-async def websocket_stream(websocket: WebSocket):
+async def websocket_stream(
+    websocket: WebSocket,
+    CallSid: str = Form(...)
+    ):
     """Handle Twilio Media Stream WebSocket connection"""
     
     # Step 1: Accept WebSocket connection
