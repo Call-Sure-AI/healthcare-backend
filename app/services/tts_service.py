@@ -1,7 +1,7 @@
 import asyncio
 import base64
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, AsyncIterator
 from collections import deque
 import httpx
 from app.config.voice_config import voice_config
