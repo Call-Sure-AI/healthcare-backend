@@ -232,7 +232,7 @@ async def handle_incoming_call(
 """
 
 
-"""@router.websocket("/stream")
+@router.websocket("/stream")
 async def websocket_stream(
     websocket: WebSocket,
     call_sid: str = Query(...),
@@ -328,7 +328,7 @@ async def websocket_stream(
             await websocket.close()
         except RuntimeError:
             pass
-        print(f"Cleanup complete for {call_sid}")"""
+        print(f"Cleanup complete for {call_sid}")
 
 async def process_audio_buffer(
     call_sid: str,

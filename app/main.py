@@ -110,7 +110,7 @@ async def log_requests(request: Request, call_next):
 
 
 
-"""@app.exception_handler(StarletteHTTPException)
+@app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     return JSONResponse(
         status_code=exc.status_code,
@@ -165,7 +165,7 @@ async def general_exception_handler(request: Request, exc: Exception):
             "data": None
         }
     )
-"""
+
 
 app.include_router(doctor.router, prefix="/api/v1", tags=["👨‍⚕️ Doctors"])
 app.include_router(appointment.router, prefix="/api/v1", tags=["📅 Appointments"])
