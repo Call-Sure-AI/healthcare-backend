@@ -14,7 +14,7 @@ from app.services.voice_agent_service import VoiceAgentService
 from app.services.redis_service import redis_service
 from app.models.call_session import CallSession
 
-# Import new services
+from app.config.database import get_db
 from app.services.stream_service import StreamService
 from app.services.tts_service import TTSService
 from app.services.deepgram_service import DeepgramManager
