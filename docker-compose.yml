@@ -6,15 +6,17 @@ services:
     container_name: healthcare-backend
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"  # Only bind to localhost for nginx
     env_file:
       - .env
     environment:
       - PYTHONUNBUFFERED=1
+      - FORWARDED_ALLOW_IPS=*  # Allow all proxy IPs
     volumes:
       - ./logs:/app/logs
     networks:
       - healthcare-network
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips '*' --ws websockets
     deploy:
       resources:
         limits:
