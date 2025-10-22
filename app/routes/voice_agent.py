@@ -131,10 +131,7 @@ async def handle_incoming_call(
 
 
 @router.websocket("/stream")
-async def websocket_stream(
-    websocket: WebSocket,
-    CallSid: str = Form(...)
-    ):
+async def websocket_stream(websocket: WebSocket):
     """Handle Twilio Media Stream WebSocket connection"""
     
     # Step 1: Accept WebSocket connection
@@ -155,23 +152,38 @@ async def websocket_stream(
     # Step 3: If no query params, wait for Twilio's 'start' event
     first_message_data = None
     if not call_sid:
-        logger.warning("⚠ No call_sid in query params, waiting for Twilio start event...")
+        logger.warning("⚠ No call_sid in query params, waiting for Twilio events...")
         
         try:
-            # Wait for first message (Twilio always sends 'start' first)
-            first_message = await asyncio.wait_for(
-                websocket.receive_text(),
-                timeout=10.0
-            )
-            first_message_data = json.loads(first_message)
-            
-            if first_message_data.get("event") == "start":
-                # Extract call_sid from start event
-                call_sid = first_message_data.get("start", {}).get("callSid")
-                logger.info(f"✓ Extracted call_sid from start event: {call_sid}")
-            else:
-                logger.error(f"✗ First message was not 'start' event: {first_message_data.get('event')}")
-            
+            # Twilio sends 'connected' event first, then 'start' event
+            max_attempts = 3
+            for attempt in range(max_attempts):
+                message = await asyncio.wait_for(
+                    websocket.receive_text(),
+                    timeout=10.0
+                )
+                data = json.loads(message)
+                event_type = data.get("event")
+                
+                logger.info(f"   Received event #{attempt + 1}: {event_type}")
+                
+                if event_type == "connected":
+                    logger.info("   ✓ Received 'connected' event, waiting for 'start'...")
+                    continue
+                    
+                elif event_type == "start":
+                    # Extract call_sid from start event
+                    call_sid = data.get("start", {}).get("callSid")
+                    first_message_data = data
+                    logger.info(f"✓ Extracted call_sid from start event: {call_sid}")
+                    break
+                    
+                else:
+                    logger.warning(f"⚠ Unexpected event: {event_type}")
+                    
+            if not call_sid:
+                logger.error("✗ Did not receive 'start' event with callSid")
+                
         except asyncio.TimeoutError:
             logger.error("✗ Timeout waiting for start event (10s)")
             try:
@@ -181,7 +193,7 @@ async def websocket_stream(
                 pass
             return
         except Exception as e:
-            logger.error(f"✗ Error receiving first message: {e}")
+            logger.error(f"✗ Error receiving messages: {e}")
             traceback.print_exc()
             try:
                 await websocket.close(code=1011)
@@ -191,7 +203,7 @@ async def websocket_stream(
     
     # Step 4: Validate we have call_sid
     if not call_sid:
-        logger.error("✗ Could not obtain call_sid from query params or start event")
+        logger.error("✗ Could not obtain call_sid from any source")
         try:
             await websocket.send_json({
                 "error": "Missing call_sid",
@@ -261,7 +273,7 @@ async def websocket_stream(
                 if connected:
                     logger.info("✓ Deepgram connected")
                 else:
-                    logger.warning("⚠ Deepgram connection failed")
+                    logger.warning("⚠ Deepgram connection failed, continuing without STT")
                     deepgram_service = None
         except Exception as e:
             logger.error(f"✗ Deepgram initialization error: {e}")
@@ -287,14 +299,17 @@ async def websocket_stream(
         
         # If we already received the 'start' event while getting call_sid, process it
         if first_message_data and first_message_data.get("event") == "start":
-            logger.info("Processing buffered start event...")
+            logger.info("📦 Processing buffered start event...")
             stream_sid = first_message_data.get("streamSid")
             stream_service.set_stream_sid(stream_sid)
             
             logger.info(f"🚀 Stream started: {stream_sid}")
             
             # Update Redis
-            redis_service.update_session(call_sid, {"stream_sid": stream_sid})
+            try:
+                redis_service.update_session(call_sid, {"stream_sid": stream_sid})
+            except Exception as e:
+                logger.error(f"Redis update error: {e}")
             
             # Send greeting
             greeting_text = f"Thank you for calling {voice_config.CLINIC_NAME}! How can I help you today?"
@@ -311,7 +326,7 @@ async def websocket_stream(
                 logger.error(f"✗ Error sending greeting: {e}")
                 traceback.print_exc()
             
-            message_count = 1
+            message_count = 2  # We've processed 'connected' and 'start'
         
         # Main message loop
         while True:
@@ -326,7 +341,11 @@ async def websocket_stream(
                 if message_count % 100 == 0:
                     logger.info(f"📊 Processed {message_count} messages")
                 
-                if event == "start":
+                if event == "connected":
+                    # Ignore additional connected events
+                    logger.info("📡 Connected event (already handled)")
+                    
+                elif event == "start":
                     # If we haven't processed start yet
                     if not has_sent_greeting:
                         stream_sid = data.get("streamSid")
@@ -335,7 +354,10 @@ async def websocket_stream(
                         logger.info(f"\n🚀 Stream started: {stream_sid}")
                         
                         # Update Redis
-                        redis_service.update_session(call_sid, {"stream_sid": stream_sid})
+                        try:
+                            redis_service.update_session(call_sid, {"stream_sid": stream_sid})
+                        except Exception as e:
+                            logger.error(f"Redis update error: {e}")
                         
                         # Send greeting
                         greeting_text = f"Thank you for calling {voice_config.CLINIC_NAME}! How can I help you today?"
@@ -361,20 +383,20 @@ async def websocket_stream(
                                 audio_chunk = base64.b64decode(payload)
                                 await deepgram_service.send_audio(audio_chunk)
                             except Exception as e:
-                                if message_count % 100 == 0:
-                                    logger.error(f"✗ Deepgram error: {e}")
+                                if message_count % 500 == 0:
+                                    logger.error(f"✗ Deepgram send error: {e}")
                 
                 elif event == "mark":
                     mark_name = data.get("mark", {}).get("name")
                     if message_count % 50 == 0:
-                        logger.info(f"✓ Mark: {mark_name}")
+                        logger.debug(f"✓ Mark: {mark_name}")
                 
                 elif event == "stop":
                     logger.info("\n🛑 Stop event received")
                     break
+                    
                 else:
-                    if message_count % 100 == 0:
-                        logger.info(f"⚠ Unknown event: {event}")
+                    logger.debug(f"⚠ Unknown event: {event}")
                     
             except WebSocketDisconnect:
                 logger.info("\n✓ Client disconnected")
@@ -388,7 +410,7 @@ async def websocket_stream(
                 continue
     
     except Exception as e:
-        logger.error(f"\n✗ FATAL ERROR: {e}")
+        logger.error(f"\n✗ FATAL ERROR in initialization: {e}")
         traceback.print_exc()
     
     finally:
@@ -430,6 +452,7 @@ async def websocket_stream(
         
         logger.info(f"✓ Cleanup complete for {call_sid}")
         logger.info("=" * 80)
+
 
 
 @router.post("/status")
