@@ -42,7 +42,7 @@ class DeepgramService:
             os.environ['DEEPGRAM_API_KEY'] = api_key
             logger.info("✓ Environment variable set")
             
-            # Import AsyncDeepgramClient for SDK 5.1.0
+            # Import AsyncDeepgramClient
             from deepgram import AsyncDeepgramClient
             
             logger.info("✓ Imported AsyncDeepgramClient")
@@ -51,7 +51,6 @@ class DeepgramService:
             self.client = AsyncDeepgramClient()
             logger.info("✓ AsyncDeepgramClient created")
             
-            # Store for use in connect()
             self.initialized = True
             
             logger.info("=" * 80)
@@ -67,7 +66,7 @@ class DeepgramService:
             self.initialized = False
     
     async def connect(self) -> bool:
-        """Start Deepgram connection using v2.connect()"""
+        """Start Deepgram connection - SDK 5.1.0 uses context manager"""
         if not hasattr(self, 'initialized') or not self.initialized:
             logger.error("❌ Client not initialized")
             return False
@@ -77,7 +76,7 @@ class DeepgramService:
             logger.info("CONNECTING TO DEEPGRAM")
             logger.info("=" * 80)
             
-            # SDK 5.1.0: Pass options as a single dict
+            # Create options dict
             options = {
                 'model': 'nova-2-phonecall',
                 'language': 'en-US',
@@ -90,40 +89,36 @@ class DeepgramService:
             }
             
             logger.info(f"✓ Options: {options['model']}, {options['encoding']}, {options['sample_rate']}Hz")
-            logger.info("Creating v2 connection...")
             
-            # Pass options as dict to connect()
-            self.dg_connection = await self.client.listen.v2.connect(options)
+            # SDK 5.1.0: Use async context manager
+            logger.info("Creating connection with context manager...")
             
-            logger.info("✓ Connection created")
-            
-            # Register event handlers
-            logger.info("Registering event handlers...")
-            
-            # Try EventType enum first
-            try:
-                from deepgram import EventType
-                self.dg_connection.on(EventType.OPEN, self._on_open)
-                self.dg_connection.on(EventType.MESSAGE, self._on_transcript)
-                self.dg_connection.on(EventType.ERROR, self._on_error)
-                self.dg_connection.on(EventType.CLOSE, self._on_close)
-                logger.info("✓ Handlers registered with EventType")
-            except ImportError:
-                # Fallback to string names
-                self.dg_connection.on("Open", self._on_open)
-                self.dg_connection.on("Message", self._on_transcript)
-                self.dg_connection.on("Error", self._on_error)
-                self.dg_connection.on("Close", self._on_close)
-                logger.info("✓ Handlers registered with strings")
-            
-            # Start listening
-            logger.info("Starting listening...")
-            await self.dg_connection.start_listening()
-            
-            logger.info("=" * 80)
-            logger.info("✓✓✓ CONNECTED AND LISTENING!")
-            logger.info("=" * 80)
-            return True
+            # connect() takes NO arguments - it returns a context manager
+            async with self.client.listen.v2.connect() as connection:
+                logger.info("✓ Connection established")
+                
+                # Store connection
+                self.dg_connection = connection
+                
+                # Register event handlers
+                logger.info("Registering handlers...")
+                connection.on("Open", self._on_open)
+                connection.on("Transcript", self._on_transcript)
+                connection.on("Error", self._on_error)
+                connection.on("Close", self._on_close)
+                logger.info("✓ Handlers registered")
+                
+                # Configure connection with options
+                logger.info("Configuring connection...")
+                await connection.configure(options)
+                logger.info("✓ Connection configured")
+                
+                logger.info("=" * 80)
+                logger.info("✓✓✓ CONNECTED!")
+                logger.info("=" * 80)
+                
+                # Keep connection open
+                return True
             
         except Exception as e:
             logger.error("=" * 80)
@@ -136,24 +131,15 @@ class DeepgramService:
     def _on_open(self, *args, **kwargs):
         """WebSocket opened"""
         logger.info("=" * 80)
-        logger.info("🎤🎤🎤 DEEPGRAM CONNECTED!")
+        logger.info("🎤🎤🎤 WEBSOCKET OPENED!")
         logger.info("=" * 80)
     
     def _on_transcript(self, *args, **kwargs):
-        """Handle transcription (called on MESSAGE event)"""
+        """Handle transcription"""
         try:
-            # Get message
-            message = kwargs.get('message') or (args[0] if args else None)
-            if not message:
+            result = kwargs.get('result') or (args[0] if args else None)
+            if not result:
                 return
-            
-            # Check message type
-            message_type = getattr(message, 'type', None)
-            if message_type != 'Results':
-                return
-            
-            # Get result
-            result = getattr(message, 'result', None) if hasattr(message, 'result') else message
             
             # Extract text
             text = ''
