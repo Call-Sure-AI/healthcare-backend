@@ -54,40 +54,45 @@ class StreamService:
             self.audio_buffer[index] = audio
     
     async def _send_audio(self, audio: str) -> None:
-        """
-        Send audio to Twilio and attach a mark event for playback tracking.
-        
-        Args:
-            audio: Base64 encoded mulaw/8000 audio
-        """
+        """Send audio to Twilio and attach a mark event for playback tracking."""
         if not self.stream_sid:
             logger.error("StreamService -> Cannot send audio: stream_sid not set")
             return
         
+        if not audio or len(audio) == 0:
+            logger.error("StreamService -> Cannot send empty audio")
+            return
+        
         try:
             # Send media message
-            await self.ws.send_text(json.dumps({
-                "streamSid": self.stream_sid,
+            media_message = {
                 "event": "media",
+                "streamSid": self.stream_sid,
                 "media": {
                     "payload": audio
                 }
-            }))
+            }
+            
+            await self.ws.send_text(json.dumps(media_message))
+            logger.info(f"StreamService -> Sent audio ({len(audio)} chars)")
             
             # Send mark message to track when this audio completes
             mark_label = str(uuid.uuid4())
-            await self.ws.send_text(json.dumps({
-                "streamSid": self.stream_sid,
+            mark_message = {
                 "event": "mark",
+                "streamSid": self.stream_sid,
                 "mark": {
                     "name": mark_label
                 }
-            }))
+            }
+            await self.ws.send_text(json.dumps(mark_message))
             
-            logger.debug(f"StreamService -> Sent audio chunk with mark: {mark_label}")
+            logger.debug(f"StreamService -> Sent mark: {mark_label}")
             
         except Exception as e:
             logger.error(f"StreamService -> Error sending audio: {e}")
+            import traceback
+            traceback.print_exc()
             raise
     
     def reset(self) -> None:

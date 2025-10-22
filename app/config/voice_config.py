@@ -22,7 +22,7 @@ class VoiceAgentConfig:
     ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID")
 
     DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
-
+    VOICE_MODEL: str = os.getenv("VOICE_MODEL")
     CALL_SESSION_TTL = int(os.getenv("CALL_SESSION_TTL"))
     MAX_CALL_DURATION = int(os.getenv("MAX_CALL_DURATION"))
     MAX_RETRY_ATTEMPTS = int(os.getenv("MAX_RETRY_ATTEMPTS"))

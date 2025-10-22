@@ -1,7 +1,7 @@
 import asyncio
 import base64
 import logging
-from typing import Optional, Dict, Any, AsyncIterator
+from typing import Optional, AsyncIterator
 from collections import deque
 import httpx
 from app.config.voice_config import voice_config
@@ -11,8 +11,8 @@ logger = logging.getLogger(__name__)
 
 class TTSService:
     """
-    Manages TTS generation with rate limiting and fallback support.
-    Uses Deepgram REST API primarily.
+    Manages TTS generation with rate limiting.
+    Uses Deepgram REST API.
     """
     
     def __init__(self):
@@ -53,17 +53,20 @@ class TTSService:
         
         try:
             # Rate limiting
-            time_since_last = asyncio.get_event_loop().time() - self.last_request_time
+            current_time = asyncio.get_event_loop().time()
+            time_since_last = current_time - self.last_request_time
             if time_since_last < self.min_request_interval:
                 await asyncio.sleep(self.min_request_interval - time_since_last)
             
-            # Call Deepgram TTS API
-            voice_model = voice_config.VOICE_MODEL or "aura-stella-en"
+            # Get voice model from config or use default
+            voice_model = getattr(voice_config, 'VOICE_MODEL', 'aura-stella-en')
+            
+            # Build API URL
             url = f"https://api.deepgram.com/v1/speak?model={voice_model}&encoding=mulaw&sample_rate=8000&container=none"
             
-            logger.info(f"TTS -> Generating audio for: {text[:50]}...")
+            logger.info(f"TTS -> Generating audio for: '{text[:50]}...'")
             
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=15.0) as client:
                 response = await client.post(
                     url,
                     headers={
@@ -77,10 +80,14 @@ class TTSService:
                     # Get audio bytes
                     audio_bytes = response.content
                     
+                    if len(audio_bytes) == 0:
+                        logger.warning("TTS -> Received empty audio response")
+                        return
+                    
                     # Convert to base64
                     audio_b64 = base64.b64encode(audio_bytes).decode('utf-8')
                     
-                    logger.info(f"TTS -> Success ({len(audio_bytes)} bytes)")
+                    logger.info(f"TTS -> Success ({len(audio_bytes)} bytes, {len(audio_b64)} b64 chars)")
                     self.consecutive_failures = 0
                     self.last_request_time = asyncio.get_event_loop().time()
                     
@@ -89,17 +96,20 @@ class TTSService:
                 elif response.status_code == 429:
                     logger.warning("TTS -> Rate limited (429)")
                     self.consecutive_failures += 1
+                    await asyncio.sleep(1.0)  # Back off
                     
                 else:
                     logger.error(f"TTS -> Failed with status {response.status_code}")
-                    error_text = response.text
+                    error_text = response.text[:500]  # Limit error text
                     logger.error(f"TTS -> Error details: {error_text}")
                     self.consecutive_failures += 1
                     
         except asyncio.TimeoutError:
-            logger.error("TTS -> Request timeout")
+            logger.error("TTS -> Request timeout (15s)")
             self.consecutive_failures += 1
             
         except Exception as e:
             logger.error(f"TTS -> Error: {e}")
+            import traceback
+            traceback.print_exc()
             self.consecutive_failures += 1
