@@ -94,7 +94,7 @@ class DeepgramManager:
         """Creates a new DeepgramService instance for a specific call."""
         if call_sid in self._connections:
             print(f"Warning: A Deepgram connection for {call_sid} already exists. Overwriting.")
-        
+
         print(f"Creating Deepgram connection for call: {call_sid}")
         service = DeepgramService(on_speech_end_callback)
         self._connections[call_sid] = service
@@ -108,5 +108,3 @@ class DeepgramManager:
             await service.finish()
         else:
             print(f"Warning: No Deepgram connection found for {call_sid} to remove.")
-
-deepgram_manager = DeepgramManager()
