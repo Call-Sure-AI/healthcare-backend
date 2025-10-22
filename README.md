@@ -11,6 +11,7 @@ uvicorn app.main:app --reload
 choco install ngrok
 
 ngrok config add_authtoken <AUTH_TOKEN>
+ngrok config add-authtoken 33EhWIwBazEFdcloCrHCX0aIQAZ_3AYDYkih9WafwEEQonn5x
 
 # Run ngrok
 ngrok http 8080
@@ -43,3 +44,5 @@ Incoming Call → Twilio Phone Number
         ↓
    Your Appointment APIs
 
+
+http://13.232.95.198:8000/api/v1/voice/incoming
