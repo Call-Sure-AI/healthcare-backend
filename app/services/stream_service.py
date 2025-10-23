@@ -64,13 +64,13 @@ class StreamService:
             return
         
         try:
-            # Send media message - FIXED: Added missing closing brace
+            # Send media message - FIXED: Proper JSON structure
             media_message = {
                 "event": "media",
                 "streamSid": self.stream_sid,
                 "media": {
                     "payload": audio
-                }  # ✅ FIXED: This was missing!
+                }
             }
             
             await self.ws.send_text(json.dumps(media_message))
