@@ -46,7 +46,7 @@ class DeepgramService:
             os.environ['DEEPGRAM_API_KEY'] = api_key
             logger.info("✓ Environment variable set")
             
-            # Import for SDK 5.1.0 (no EventType in this version)
+            # Import for SDK 5.1.0
             from deepgram import AsyncDeepgramClient
             
             logger.info("✓ Imported AsyncDeepgramClient")
@@ -83,8 +83,8 @@ class DeepgramService:
             # Start the connection task
             self._connection_task = asyncio.create_task(self._maintain_connection())
             
-            # Wait a bit for connection to establish
-            await asyncio.sleep(1)
+            # Wait for connection to establish
+            await asyncio.sleep(1.5)
             
             if self.dg_connection:
                 logger.info("=" * 80)
@@ -106,11 +106,15 @@ class DeepgramService:
     async def _maintain_connection(self):
         """Maintain the Deepgram connection (runs in background)"""
         try:
-            # Use async context manager
+            # SDK 5.1.0: Pass ALL parameters matching TypeScript
             async with self.client.listen.v2.connect(
                 model="nova-2-phonecall",
                 encoding="mulaw",
-                sample_rate=8000
+                sample_rate=8000,
+                punctuate=True,
+                interim_results=True,
+                endpointing=200,
+                utterance_end_ms=1000
             ) as connection:
                 
                 logger.info("✓ Connection context entered")
@@ -118,7 +122,7 @@ class DeepgramService:
                 # Store connection
                 self.dg_connection = connection
                 
-                # Register event handlers using STRING names (SDK 5.1.0)
+                # Register event handlers
                 logger.info("Registering handlers...")
                 connection.on("Open", self._on_open)
                 connection.on("Message", self._on_message)
@@ -126,7 +130,7 @@ class DeepgramService:
                 connection.on("Close", self._on_close)
                 logger.info("✓ Handlers registered")
                 
-                # Start listening - CRITICAL
+                # Start listening
                 logger.info("Starting listening...")
                 await connection.start_listening()
                 logger.info("✓ Listening started")
