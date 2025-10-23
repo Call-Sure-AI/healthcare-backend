@@ -1,5 +1,5 @@
 """
-Deepgram STT Service for Deepgram SDK 5.1.0
+Deepgram STT Service for SDK 5.1.0 - Using STABLE v1 API
 """
 import asyncio
 import base64
@@ -33,7 +33,6 @@ class DeepgramService:
         """Initialize Deepgram for SDK 5.1.0"""
         from app.config.voice_config import voice_config
         
-        # Get API key
         api_key = getattr(voice_config, 'DEEPGRAM_API_KEY', None)
         if not api_key:
             logger.error("❌ DEEPGRAM_API_KEY not set")
@@ -42,16 +41,13 @@ class DeepgramService:
         logger.info(f"✓ API Key: {api_key[:10]}...{api_key[-4:]}")
         
         try:
-            # Set environment variable
             os.environ['DEEPGRAM_API_KEY'] = api_key
             logger.info("✓ Environment variable set")
             
-            # Import for SDK 5.1.0
             from deepgram import AsyncDeepgramClient
             
             logger.info("✓ Imported AsyncDeepgramClient")
             
-            # Create async client
             self.client = AsyncDeepgramClient()
             logger.info("✓ AsyncDeepgramClient created")
             
@@ -70,7 +66,7 @@ class DeepgramService:
             self.initialized = False
     
     async def connect(self) -> bool:
-        """Start Deepgram connection using SDK 5.1.0 pattern"""
+        """Start Deepgram connection using SDK 5.1.0"""
         if not hasattr(self, 'initialized') or not self.initialized:
             logger.error("❌ Client not initialized")
             return False
@@ -80,11 +76,10 @@ class DeepgramService:
             logger.info("CONNECTING TO DEEPGRAM")
             logger.info("=" * 80)
             
-            # Start the connection task
             self._connection_task = asyncio.create_task(self._maintain_connection())
             
-            # Wait for connection to establish
-            await asyncio.sleep(1.5)
+            # Wait for connection
+            await asyncio.sleep(2)
             
             if self.dg_connection:
                 logger.info("=" * 80)
@@ -104,47 +99,42 @@ class DeepgramService:
             return False
     
     async def _maintain_connection(self):
-        """Maintain the Deepgram connection (runs in background)"""
+        """Maintain the Deepgram connection - Using v1 API"""
         try:
-            # SDK 5.1.0: Only 3 required params in connect()
-            async with self.client.listen.v2.connect(
-                model="nova-2-phonecall",
-                encoding="mulaw",
-                sample_rate=8000
-            ) as connection:
+            # SDK 5.1.0: Use v1 API (more stable than v2)
+            logger.info("Creating v1 websocket connection...")
+            
+            # Build options for v1
+            options = {
+                'model': 'nova-2-phonecall',
+                'encoding': 'mulaw',
+                'sample_rate': 8000,
+                'punctuate': True,
+                'interim_results': True,
+                'endpointing': 300,
+                'utterance_end_ms': '1200',
+                'language': 'en'
+            }
+            
+            logger.info(f"Options: {options}")
+            
+            # Use v1.websocket() with options dict
+            async with self.client.listen.v1.websocket(options) as connection:
                 
                 logger.info("✓ Connection context entered")
                 
-                # Store connection
                 self.dg_connection = connection
                 
                 # Register event handlers
                 logger.info("Registering handlers...")
                 connection.on("Open", self._on_open)
-                connection.on("Message", self._on_message)
+                connection.on("Results", self._on_message)  # v1 uses "Results"
                 connection.on("Error", self._on_error)
                 connection.on("Close", self._on_close)
                 logger.info("✓ Handlers registered")
                 
-                # SDK 5.1.0: Send additional options via send_options()
-                logger.info("Sending additional options...")
-                try:
-                    await connection.send_options({
-                        'punctuate': True,
-                        'interim_results': True,
-                        'endpointing': 200,
-                        'utterance_end_ms': 1000
-                    })
-                    logger.info("✓ Options sent")
-                except AttributeError:
-                    logger.warning("⚠ send_options not available")
-                
-                # Start listening
-                logger.info("Starting listening...")
-                await connection.start_listening()
-                logger.info("✓ Listening started")
-                
                 # Keep connection alive
+                logger.info("✓ Connection ready - keeping alive")
                 while self.dg_connection:
                     await asyncio.sleep(0.1)
                     
@@ -163,7 +153,6 @@ class DeepgramService:
     def _on_message(self, *args, **kwargs):
         """Handle incoming messages"""
         try:
-            # Get result
             result = kwargs.get('result') or (args[0] if args else None)
             if not result:
                 return
@@ -259,7 +248,6 @@ class DeepgramService:
                 await self.dg_connection.finish()
                 self.dg_connection = None
                 
-                # Cancel connection task
                 if self._connection_task:
                     self._connection_task.cancel()
                     
