@@ -1,3 +1,7 @@
+"""
+Deepgram STT Service for Deepgram SDK 5.1.0
+Based on official SDK documentation
+"""
 import asyncio
 import base64
 import logging
@@ -19,6 +23,7 @@ class DeepgramService:
         self.speech_final = False
         self._on_speech_end = on_speech_end_callback
         self.audio_sent_count = 0
+        self._connection_task = None
         
         logger.info("=" * 80)
         logger.info("DeepgramService -> Initializing SDK 5.1.0")
@@ -42,13 +47,14 @@ class DeepgramService:
             os.environ['DEEPGRAM_API_KEY'] = api_key
             logger.info("✓ Environment variable set")
             
-            # Import AsyncDeepgramClient
-            from deepgram import AsyncDeepgramClient
+            # Import for SDK 5.1.0
+            from deepgram import AsyncDeepgramClient, EventType
             
-            logger.info("✓ Imported AsyncDeepgramClient")
+            logger.info("✓ Imported AsyncDeepgramClient and EventType")
             
             # Create async client
             self.client = AsyncDeepgramClient()
+            self.EventType = EventType
             logger.info("✓ AsyncDeepgramClient created")
             
             self.initialized = True
@@ -66,7 +72,7 @@ class DeepgramService:
             self.initialized = False
     
     async def connect(self) -> bool:
-        """Start Deepgram connection - SDK 5.1.0"""
+        """Start Deepgram connection using SDK 5.1.0 pattern"""
         if not hasattr(self, 'initialized') or not self.initialized:
             logger.error("❌ Client not initialized")
             return False
@@ -76,66 +82,24 @@ class DeepgramService:
             logger.info("CONNECTING TO DEEPGRAM")
             logger.info("=" * 80)
             
-            logger.info("Creating v2 connection with required params...")
+            # SDK 5.1.0: Use async context manager with connect()
+            logger.info("Creating v2 connection...")
             
-            # SDK 5.1.0: Pass required params as keyword arguments
-            async with self.client.listen.v2.connect(
-                model="nova-2-phonecall",
-                encoding="mulaw",
-                sample_rate=8000
-            ) as connection:
-                
-                logger.info("✓ Connection established")
-                
-                # Store connection
-                self.dg_connection = connection
-                
-                # Register event handlers
-                logger.info("Registering handlers...")
-                connection.on("Open", self._on_open)
-                connection.on("Transcript", self._on_transcript)
-                connection.on("Error", self._on_error)
-                connection.on("Close", self._on_close)
-                logger.info("✓ Handlers registered")
-                
-                # Send additional options if needed
-                logger.info("Sending additional options...")
-                options = {
-                    'language': 'en-US',
-                    'punctuate': True,
-                    'interim_results': True,
-                    'endpointing': 300,
-                    'utterance_end_ms': 1200,
-                }
-                
-                # Try to apply additional options
-                try:
-                    await connection.send_options(options)
-                    logger.info("✓ Additional options sent")
-                except AttributeError:
-                    # If send_options doesn't exist, options might already be applied
-                    logger.info("ℹ Additional options not needed")
-                
+            # Start the connection task
+            self._connection_task = asyncio.create_task(self._maintain_connection())
+            
+            # Wait a bit for connection to establish
+            await asyncio.sleep(1)
+            
+            if self.dg_connection:
                 logger.info("=" * 80)
                 logger.info("✓✓✓ CONNECTED AND READY!")
                 logger.info("=" * 80)
-                
-                # Connection stays open - THIS IS THE KEY
-                # We need to keep the async context open
-                # So we can't return here
-                
-                # Instead, store that we're connected
-                self._connected = True
-                
-                # Wait indefinitely to keep connection open
-                try:
-                    while self._connected:
-                        await asyncio.sleep(0.1)
-                except asyncio.CancelledError:
-                    logger.info("Connection task cancelled")
-                
                 return True
-            
+            else:
+                logger.error("Connection not established")
+                return False
+        
         except Exception as e:
             logger.error("=" * 80)
             logger.error(f"❌ CONNECTION FAILED: {e}")
@@ -144,20 +108,64 @@ class DeepgramService:
             traceback.print_exc()
             return False
     
+    async def _maintain_connection(self):
+        """Maintain the Deepgram connection (runs in background)"""
+        try:
+            # Use async context manager - this keeps connection open
+            async with self.client.listen.v2.connect(
+                model="nova-2-phonecall",
+                encoding="mulaw",
+                sample_rate=8000
+            ) as connection:
+                
+                logger.info("✓ Connection context entered")
+                
+                # Store connection
+                self.dg_connection = connection
+                
+                # Register event handlers using EventType enum
+                logger.info("Registering handlers...")
+                connection.on(self.EventType.OPEN, self._on_open)
+                connection.on(self.EventType.MESSAGE, self._on_message)
+                connection.on(self.EventType.ERROR, self._on_error)
+                connection.on(self.EventType.CLOSE, self._on_close)
+                logger.info("✓ Handlers registered")
+                
+                # Start listening - CRITICAL for SDK 5.1.0
+                logger.info("Starting listening...")
+                await connection.start_listening()
+                logger.info("✓ Listening started")
+                
+                # Keep connection alive
+                while self.dg_connection:
+                    await asyncio.sleep(0.1)
+                    
+        except Exception as e:
+            logger.error(f"❌ Connection maintenance error: {e}")
+            import traceback
+            traceback.print_exc()
+            self.dg_connection = None
+    
     def _on_open(self, *args, **kwargs):
         """WebSocket opened"""
         logger.info("=" * 80)
-        logger.info("🎤🎤🎤 WEBSOCKET OPENED!")
+        logger.info("🎤🎤🎤 DEEPGRAM WEBSOCKET OPENED!")
         logger.info("=" * 80)
     
-    def _on_transcript(self, *args, **kwargs):
-        """Handle transcription"""
+    def _on_message(self, *args, **kwargs):
+        """Handle incoming messages (EventType.MESSAGE)"""
         try:
+            # SDK 5.1.0: MESSAGE event contains the result
             result = kwargs.get('result') or (args[0] if args else None)
             if not result:
                 return
             
-            # Extract text
+            # Check message type
+            message_type = getattr(result, 'type', None)
+            if message_type and message_type != 'Results':
+                return
+            
+            # Extract transcript
             text = ''
             if hasattr(result, 'channel'):
                 channel = result.channel
@@ -198,7 +206,7 @@ class DeepgramService:
                 logger.debug(f"💬 Interim: '{text}'")
                     
         except Exception as e:
-            logger.error(f"❌ Transcript error: {e}")
+            logger.error(f"❌ Message error: {e}")
             import traceback
             traceback.print_exc()
     
@@ -247,6 +255,11 @@ class DeepgramService:
                 logger.info(f"Closing ({self.audio_sent_count} chunks)")
                 await self.dg_connection.finish()
                 self.dg_connection = None
+                
+                # Cancel connection task
+                if self._connection_task:
+                    self._connection_task.cancel()
+                    
             except Exception as e:
                 logger.error(f"Close error: {e}")
     
