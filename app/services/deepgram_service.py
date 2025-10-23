@@ -19,6 +19,7 @@ class DeepgramService:
         self.speech_final = False
         self._on_speech_end = on_speech_end_callback
         self.audio_sent_count = 0
+        self._connection_established = False
         
         logger.info("=" * 80)
         logger.info("DeepgramService -> Initializing SDK 3.7.2")
@@ -78,13 +79,36 @@ class DeepgramService:
             # Get connection
             self.dg_connection = self.client.listen.asynclive.v("1")
             
-            # Register handlers
-            logger.info("Registering handlers...")
-            self.dg_connection.on(self.LiveTranscriptionEvents.Open, self._on_open)
-            self.dg_connection.on(self.LiveTranscriptionEvents.Transcript, self._on_transcript)
-            self.dg_connection.on(self.LiveTranscriptionEvents.Error, self._on_error)
-            self.dg_connection.on(self.LiveTranscriptionEvents.Close, self._on_close)
-            logger.info("✓ Handlers registered")
+            # Register ASYNC handlers
+            logger.info("Registering async handlers...")
+            
+            # Define async wrapper functions
+            async def on_open_wrapper(*args, **kwargs):
+                await self._on_open(*args, **kwargs)
+            
+            async def on_transcript_wrapper(*args, **kwargs):
+                await self._on_transcript(*args, **kwargs)
+            
+            async def on_error_wrapper(*args, **kwargs):
+                await self._on_error(*args, **kwargs)
+            
+            async def on_close_wrapper(*args, **kwargs):
+                await self._on_close(*args, **kwargs)
+            
+            async def on_metadata_wrapper(*args, **kwargs):
+                await self._on_metadata(*args, **kwargs)
+            
+            async def on_utterance_end_wrapper(*args, **kwargs):
+                await self._on_utterance_end(*args, **kwargs)
+            
+            self.dg_connection.on(self.LiveTranscriptionEvents.Open, on_open_wrapper)
+            self.dg_connection.on(self.LiveTranscriptionEvents.Transcript, on_transcript_wrapper)
+            self.dg_connection.on(self.LiveTranscriptionEvents.Error, on_error_wrapper)
+            self.dg_connection.on(self.LiveTranscriptionEvents.Close, on_close_wrapper)
+            self.dg_connection.on(self.LiveTranscriptionEvents.Metadata, on_metadata_wrapper)
+            self.dg_connection.on(self.LiveTranscriptionEvents.UtteranceEnd, on_utterance_end_wrapper)
+            
+            logger.info("✓ Async handlers registered")
             
             # Create options
             options = self.LiveOptions(
@@ -116,13 +140,30 @@ class DeepgramService:
             traceback.print_exc()
             return False
     
-    def _on_open(self, *args, **kwargs):
+    async def _on_open(self, *args, **kwargs):
         """WebSocket opened"""
+        self._connection_established = True
         logger.info("=" * 80)
         logger.info("🎤🎤🎤 WEBSOCKET OPENED!")
         logger.info("=" * 80)
     
-    def _on_transcript(self, *args, **kwargs):
+    async def _on_metadata(self, *args, **kwargs):
+        """Handle metadata"""
+        logger.info("📋 Received metadata from Deepgram")
+    
+    async def _on_utterance_end(self, *args, **kwargs):
+        """Handle utterance end"""
+        if self.final_result.strip():
+            final_text = self.final_result.strip()
+            logger.info("=" * 80)
+            logger.info("🎤 UTTERANCE END!")
+            logger.info(f"USER SAID: '{final_text}'")
+            logger.info("=" * 80)
+            
+            await self._on_speech_end(final_text)
+            self.final_result = ""
+    
+    async def _on_transcript(self, *args, **kwargs):
         """Handle transcription"""
         try:
             result = kwargs.get('result') or (args[0] if args else None)
@@ -162,7 +203,7 @@ class DeepgramService:
                     logger.info("=" * 80)
                     
                     # Trigger callback
-                    asyncio.create_task(self._on_speech_end(final_text))
+                    await self._on_speech_end(final_text)
                     
                     self.final_result = ""
             else:
@@ -173,16 +214,17 @@ class DeepgramService:
             import traceback
             traceback.print_exc()
     
-    def _on_error(self, *args, **kwargs):
+    async def _on_error(self, *args, **kwargs):
         """Handle errors"""
         error = kwargs.get('error') or (args[0] if args else 'Unknown')
         logger.error("=" * 80)
         logger.error(f"❌❌❌ ERROR: {error}")
         logger.error("=" * 80)
     
-    def _on_close(self, *args, **kwargs):
+    async def _on_close(self, *args, **kwargs):
         """Connection closed"""
         logger.info(f"Connection closed ({self.audio_sent_count} chunks)")
+        self._connection_established = False
     
     async def send_audio(self, audio_chunk: bytes):
         """Send audio to Deepgram"""
