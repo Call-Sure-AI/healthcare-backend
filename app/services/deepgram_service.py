@@ -1,7 +1,3 @@
-"""
-Deepgram STT Service for SDK 5.1.0
-Based on official GitHub documentation
-"""
 import asyncio
 import base64
 import logging
@@ -14,7 +10,7 @@ TranscriptCallback = Callable[[str], Awaitable[None]]
 
 
 class DeepgramService:
-    """Deepgram service using SDK 5.1.0 official pattern"""
+    """Deepgram service using stable SDK 3.7.2"""
     
     def __init__(self, on_speech_end_callback: TranscriptCallback):
         """Initialize Deepgram service."""
@@ -23,15 +19,14 @@ class DeepgramService:
         self.speech_final = False
         self._on_speech_end = on_speech_end_callback
         self.audio_sent_count = 0
-        self._connection_task = None
         
         logger.info("=" * 80)
-        logger.info("DeepgramService -> Initializing SDK 5.1.0")
+        logger.info("DeepgramService -> Initializing SDK 3.7.2")
         logger.info("=" * 80)
         self._initialize_connection()
     
     def _initialize_connection(self):
-        """Initialize Deepgram for SDK 5.1.0"""
+        """Initialize Deepgram for SDK 3.7.2"""
         from app.config.voice_config import voice_config
         
         api_key = getattr(voice_config, 'DEEPGRAM_API_KEY', None)
@@ -42,17 +37,18 @@ class DeepgramService:
         logger.info(f"✓ API Key: {api_key[:10]}...{api_key[-4:]}")
         
         try:
-            os.environ['DEEPGRAM_API_KEY'] = api_key
-            logger.info("✓ Environment variable set")
+            # SDK 3.x imports
+            from deepgram import DeepgramClient, DeepgramClientOptions, LiveTranscriptionEvents, LiveOptions
             
-            # Import SDK 5.x components
-            from deepgram import AsyncDeepgramClient, EventType
+            logger.info("✓ Imported SDK 3.x components")
             
-            logger.info("✓ Imported AsyncDeepgramClient and EventType")
+            # Create config
+            config = DeepgramClientOptions(api_key=api_key)
+            self.client = DeepgramClient("", config)
+            self.LiveTranscriptionEvents = LiveTranscriptionEvents
+            self.LiveOptions = LiveOptions
             
-            self.client = AsyncDeepgramClient()
-            self.EventType = EventType
-            logger.info("✓ AsyncDeepgramClient created")
+            logger.info("✓ DeepgramClient created")
             
             self.initialized = True
             
@@ -60,18 +56,6 @@ class DeepgramService:
             logger.info("✓✓✓ DEEPGRAM INITIALIZED")
             logger.info("=" * 80)
             
-        except ImportError as e:
-            logger.error(f"❌ Import failed: {e}. EventType may not exist in this SDK version")
-            # Try without EventType
-            try:
-                from deepgram import AsyncDeepgramClient
-                self.client = AsyncDeepgramClient()
-                self.EventType = None
-                self.initialized = True
-                logger.info("✓ Initialized without EventType (using strings)")
-            except Exception as e2:
-                logger.error(f"❌ Failed completely: {e2}")
-                self.initialized = False
         except Exception as e:
             logger.error("=" * 80)
             logger.error(f"❌ FAILED: {e}")
@@ -91,20 +75,39 @@ class DeepgramService:
             logger.info("CONNECTING TO DEEPGRAM")
             logger.info("=" * 80)
             
-            self._connection_task = asyncio.create_task(self._maintain_connection())
+            # Get connection
+            self.dg_connection = self.client.listen.asynclive.v("1")
             
-            # Wait for connection
-            await asyncio.sleep(2)
+            # Register handlers
+            logger.info("Registering handlers...")
+            self.dg_connection.on(self.LiveTranscriptionEvents.Open, self._on_open)
+            self.dg_connection.on(self.LiveTranscriptionEvents.Transcript, self._on_transcript)
+            self.dg_connection.on(self.LiveTranscriptionEvents.Error, self._on_error)
+            self.dg_connection.on(self.LiveTranscriptionEvents.Close, self._on_close)
+            logger.info("✓ Handlers registered")
             
-            if self.dg_connection:
-                logger.info("=" * 80)
-                logger.info("✓✓✓ CONNECTED AND READY!")
-                logger.info("=" * 80)
-                return True
-            else:
-                logger.error("Connection not established")
-                return False
-        
+            # Create options
+            options = self.LiveOptions(
+                model="nova-2-phonecall",
+                encoding="mulaw",
+                sample_rate=8000,
+                punctuate=True,
+                interim_results=True,
+                endpointing=300,
+                utterance_end_ms=1200
+            )
+            
+            logger.info(f"✓ Options: {options.model}, {options.encoding}, {options.sample_rate}Hz")
+            
+            # Start connection
+            logger.info("Starting connection...")
+            await self.dg_connection.start(options)
+            
+            logger.info("=" * 80)
+            logger.info("✓✓✓ CONNECTED!")
+            logger.info("=" * 80)
+            return True
+            
         except Exception as e:
             logger.error("=" * 80)
             logger.error(f"❌ CONNECTION FAILED: {e}")
@@ -113,75 +116,20 @@ class DeepgramService:
             traceback.print_exc()
             return False
     
-    async def _maintain_connection(self):
-        """Maintain connection - Official SDK 5.x pattern from GitHub"""
-        try:
-            logger.info("Creating v2 connection (official pattern)...")
-            
-            # Official SDK 5.x pattern from GitHub README
-            async with self.client.listen.v2.connect(
-                model="nova-2-phonecall",
-                encoding="mulaw",
-                sample_rate=16000  # Changed from 8000 to 16000
-            ) as connection:
-                
-                logger.info("✓ Connection context entered")
-                
-                self.dg_connection = connection
-                
-                # Define async callback
-                async def on_message(message):
-                    await self._on_message(message)
-                
-                # Register event handlers
-                logger.info("Registering handlers...")
-                if self.EventType:
-                    # Use EventType enum if available
-                    connection.on(self.EventType.OPEN, lambda: logger.info("🎤 WebSocket opened"))
-                    connection.on(self.EventType.MESSAGE, on_message)
-                    connection.on(self.EventType.ERROR, lambda error: logger.error(f"❌ Error: {error}"))
-                    connection.on(self.EventType.CLOSE, lambda: logger.info("Connection closed"))
-                else:
-                    # Fallback to strings
-                    connection.on("Open", lambda: logger.info("🎤 WebSocket opened"))
-                    connection.on("Message", on_message)
-                    connection.on("Error", lambda error: logger.error(f"❌ Error: {error}"))
-                    connection.on("Close", lambda: logger.info("Connection closed"))
-                
-                logger.info("✓ Handlers registered")
-                
-                # Start listening - THIS IS REQUIRED
-                logger.info("Starting listening...")
-                await connection.start_listening()
-                logger.info("✓ Listening started")
-                
-                logger.info("=" * 80)
-                logger.info("🎤🎤🎤 DEEPGRAM READY!")
-                logger.info("=" * 80)
-                
-                # Keep connection alive
-                while self.dg_connection:
-                    await asyncio.sleep(0.1)
-                    
-        except Exception as e:
-            logger.error(f"❌ Connection error: {e}")
-            import traceback
-            traceback.print_exc()
-            self.dg_connection = None
+    def _on_open(self, *args, **kwargs):
+        """WebSocket opened"""
+        logger.info("=" * 80)
+        logger.info("🎤🎤🎤 WEBSOCKET OPENED!")
+        logger.info("=" * 80)
     
-    async def _on_message(self, message):
-        """Handle incoming message"""
+    def _on_transcript(self, *args, **kwargs):
+        """Handle transcription"""
         try:
-            # Check message type
-            if hasattr(message, 'type') and message.type != 'Results':
-                return
-            
-            # Get result
-            result = message if hasattr(message, 'channel') else getattr(message, 'result', None)
+            result = kwargs.get('result') or (args[0] if args else None)
             if not result:
                 return
             
-            # Extract transcript
+            # Extract text
             text = ''
             if hasattr(result, 'channel'):
                 channel = result.channel
@@ -221,9 +169,20 @@ class DeepgramService:
                 logger.debug(f"💬 Interim: '{text}'")
                     
         except Exception as e:
-            logger.error(f"❌ Message error: {e}")
+            logger.error(f"❌ Transcript error: {e}")
             import traceback
             traceback.print_exc()
+    
+    def _on_error(self, *args, **kwargs):
+        """Handle errors"""
+        error = kwargs.get('error') or (args[0] if args else 'Unknown')
+        logger.error("=" * 80)
+        logger.error(f"❌❌❌ ERROR: {error}")
+        logger.error("=" * 80)
+    
+    def _on_close(self, *args, **kwargs):
+        """Connection closed"""
+        logger.info(f"Connection closed ({self.audio_sent_count} chunks)")
     
     async def send_audio(self, audio_chunk: bytes):
         """Send audio to Deepgram"""
@@ -259,10 +218,6 @@ class DeepgramService:
                 logger.info(f"Closing ({self.audio_sent_count} chunks)")
                 await self.dg_connection.finish()
                 self.dg_connection = None
-                
-                if self._connection_task:
-                    self._connection_task.cancel()
-                    
             except Exception as e:
                 logger.error(f"Close error: {e}")
     
