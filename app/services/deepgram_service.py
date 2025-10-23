@@ -1,14 +1,12 @@
 """
-Deepgram STT Service - Direct WebSocket Implementation
-Works with any Deepgram SDK version
+Deepgram STT Service for SDK 5.1.0
+Based on official GitHub documentation
 """
 import asyncio
 import base64
-import json
 import logging
 import os
 from typing import Callable, Awaitable, Dict
-import websockets
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +14,7 @@ TranscriptCallback = Callable[[str], Awaitable[None]]
 
 
 class DeepgramService:
-    """Direct WebSocket connection to Deepgram API"""
+    """Deepgram service using SDK 5.1.0 official pattern"""
     
     def __init__(self, on_speech_end_callback: TranscriptCallback):
         """Initialize Deepgram service."""
@@ -26,28 +24,61 @@ class DeepgramService:
         self._on_speech_end = on_speech_end_callback
         self.audio_sent_count = 0
         self._connection_task = None
-        self.api_key = None
         
         logger.info("=" * 80)
-        logger.info("DeepgramService -> Initializing Direct WebSocket")
+        logger.info("DeepgramService -> Initializing SDK 5.1.0")
         logger.info("=" * 80)
         self._initialize_connection()
     
     def _initialize_connection(self):
-        """Initialize Deepgram configuration"""
+        """Initialize Deepgram for SDK 5.1.0"""
         from app.config.voice_config import voice_config
         
-        self.api_key = getattr(voice_config, 'DEEPGRAM_API_KEY', None)
-        if not self.api_key:
+        api_key = getattr(voice_config, 'DEEPGRAM_API_KEY', None)
+        if not api_key:
             logger.error("❌ DEEPGRAM_API_KEY not set")
             return
         
-        logger.info(f"✓ API Key: {self.api_key[:10]}...{self.api_key[-4:]}")
-        self.initialized = True
+        logger.info(f"✓ API Key: {api_key[:10]}...{api_key[-4:]}")
         
-        logger.info("=" * 80)
-        logger.info("✓✓✓ DEEPGRAM INITIALIZED")
-        logger.info("=" * 80)
+        try:
+            os.environ['DEEPGRAM_API_KEY'] = api_key
+            logger.info("✓ Environment variable set")
+            
+            # Import SDK 5.x components
+            from deepgram import AsyncDeepgramClient, EventType
+            
+            logger.info("✓ Imported AsyncDeepgramClient and EventType")
+            
+            self.client = AsyncDeepgramClient()
+            self.EventType = EventType
+            logger.info("✓ AsyncDeepgramClient created")
+            
+            self.initialized = True
+            
+            logger.info("=" * 80)
+            logger.info("✓✓✓ DEEPGRAM INITIALIZED")
+            logger.info("=" * 80)
+            
+        except ImportError as e:
+            logger.error(f"❌ Import failed: {e}. EventType may not exist in this SDK version")
+            # Try without EventType
+            try:
+                from deepgram import AsyncDeepgramClient
+                self.client = AsyncDeepgramClient()
+                self.EventType = None
+                self.initialized = True
+                logger.info("✓ Initialized without EventType (using strings)")
+            except Exception as e2:
+                logger.error(f"❌ Failed completely: {e2}")
+                self.initialized = False
+        except Exception as e:
+            logger.error("=" * 80)
+            logger.error(f"❌ FAILED: {e}")
+            logger.error("=" * 80)
+            import traceback
+            traceback.print_exc()
+            self.initialized = False
     
     async def connect(self) -> bool:
         """Start Deepgram connection"""
@@ -83,117 +114,114 @@ class DeepgramService:
             return False
     
     async def _maintain_connection(self):
-        """Maintain WebSocket connection to Deepgram"""
+        """Maintain connection - Official SDK 5.x pattern from GitHub"""
         try:
-            # Build WebSocket URL with query parameters
-            params = {
-                'model': 'nova-2-phonecall',
-                'encoding': 'mulaw',
-                'sample_rate': '8000',
-                'punctuate': 'true',
-                'interim_results': 'true',
-                'endpointing': '300',
-                'utterance_end_ms': '1200',
-                'language': 'en'
-            }
+            logger.info("Creating v2 connection (official pattern)...")
             
-            query_string = '&'.join([f"{k}={v}" for k, v in params.items()])
-            ws_url = f"wss://api.deepgram.com/v1/listen?{query_string}"
-            
-            logger.info(f"Connecting to: {ws_url[:80]}...")
-            
-            # Connect with authorization header
-            headers = {
-                'Authorization': f'Token {self.api_key}'
-            }
-            
-            async with websockets.connect(ws_url, extra_headers=headers) as websocket:
-                logger.info("✓ WebSocket connected")
+            # Official SDK 5.x pattern from GitHub README
+            async with self.client.listen.v2.connect(
+                model="nova-2-phonecall",
+                encoding="mulaw",
+                sample_rate=16000  # Changed from 8000 to 16000
+            ) as connection:
                 
-                self.dg_connection = websocket
+                logger.info("✓ Connection context entered")
+                
+                self.dg_connection = connection
+                
+                # Define async callback
+                async def on_message(message):
+                    await self._on_message(message)
+                
+                # Register event handlers
+                logger.info("Registering handlers...")
+                if self.EventType:
+                    # Use EventType enum if available
+                    connection.on(self.EventType.OPEN, lambda: logger.info("🎤 WebSocket opened"))
+                    connection.on(self.EventType.MESSAGE, on_message)
+                    connection.on(self.EventType.ERROR, lambda error: logger.error(f"❌ Error: {error}"))
+                    connection.on(self.EventType.CLOSE, lambda: logger.info("Connection closed"))
+                else:
+                    # Fallback to strings
+                    connection.on("Open", lambda: logger.info("🎤 WebSocket opened"))
+                    connection.on("Message", on_message)
+                    connection.on("Error", lambda error: logger.error(f"❌ Error: {error}"))
+                    connection.on("Close", lambda: logger.info("Connection closed"))
+                
+                logger.info("✓ Handlers registered")
+                
+                # Start listening - THIS IS REQUIRED
+                logger.info("Starting listening...")
+                await connection.start_listening()
+                logger.info("✓ Listening started")
                 
                 logger.info("=" * 80)
-                logger.info("🎤🎤🎤 DEEPGRAM WEBSOCKET OPENED!")
+                logger.info("🎤🎤🎤 DEEPGRAM READY!")
                 logger.info("=" * 80)
                 
-                # Listen for messages
-                async for message in websocket:
-                    try:
-                        data = json.loads(message)
-                        await self._handle_message(data)
-                    except json.JSONDecodeError:
-                        logger.warning(f"Invalid JSON: {message[:100]}")
-                    except Exception as e:
-                        logger.error(f"Message handling error: {e}")
-                        
+                # Keep connection alive
+                while self.dg_connection:
+                    await asyncio.sleep(0.1)
+                    
         except Exception as e:
             logger.error(f"❌ Connection error: {e}")
             import traceback
             traceback.print_exc()
             self.dg_connection = None
     
-    async def _handle_message(self, data: dict):
-        """Handle incoming Deepgram message"""
+    async def _on_message(self, message):
+        """Handle incoming message"""
         try:
             # Check message type
-            msg_type = data.get('type')
+            if hasattr(message, 'type') and message.type != 'Results':
+                return
             
-            if msg_type == 'Results':
-                # Extract transcript
-                channel = data.get('channel', {})
-                alternatives = channel.get('alternatives', [])
+            # Get result
+            result = message if hasattr(message, 'channel') else getattr(message, 'result', None)
+            if not result:
+                return
+            
+            # Extract transcript
+            text = ''
+            if hasattr(result, 'channel'):
+                channel = result.channel
+                if hasattr(channel, 'alternatives') and channel.alternatives:
+                    text = channel.alternatives[0].transcript or ''
+            
+            if not text.strip():
+                return
+            
+            # Check if final
+            is_final = getattr(result, 'is_final', False)
+            
+            if is_final:
+                self.final_result += f" {text}"
                 
-                if not alternatives:
-                    return
+                logger.info("─" * 80)
+                logger.info(f"📝 FINAL: '{text}'")
+                logger.info(f"📝 TOTAL: '{self.final_result.strip()}'")
+                logger.info("─" * 80)
                 
-                transcript = alternatives[0].get('transcript', '')
+                # Check speech_final
+                speech_final = getattr(result, 'speech_final', False)
                 
-                if not transcript.strip():
-                    return
-                
-                # Check if final
-                is_final = data.get('is_final', False)
-                
-                if is_final:
-                    self.final_result += f" {transcript}"
-                    
-                    logger.info("─" * 80)
-                    logger.info(f"📝 FINAL: '{transcript}'")
-                    logger.info(f"📝 TOTAL: '{self.final_result.strip()}'")
-                    logger.info("─" * 80)
-                    
-                    # Check speech_final
-                    speech_final = data.get('speech_final', False)
-                    
-                    if speech_final:
-                        final_text = self.final_result.strip()
-                        
-                        logger.info("=" * 80)
-                        logger.info("🎤🎤🎤 SPEECH FINAL!")
-                        logger.info(f"USER SAID: '{final_text}'")
-                        logger.info("=" * 80)
-                        
-                        # Trigger callback
-                        asyncio.create_task(self._on_speech_end(final_text))
-                        
-                        self.final_result = ""
-                else:
-                    logger.debug(f"💬 Interim: '{transcript}'")
-                    
-            elif msg_type == 'UtteranceEnd':
-                if self.final_result.strip():
+                if speech_final:
                     final_text = self.final_result.strip()
                     
                     logger.info("=" * 80)
-                    logger.info("🎤 UTTERANCE END!")
+                    logger.info("🎤🎤🎤 SPEECH FINAL!")
                     logger.info(f"USER SAID: '{final_text}'")
                     logger.info("=" * 80)
                     
+                    # Trigger callback
                     asyncio.create_task(self._on_speech_end(final_text))
+                    
                     self.final_result = ""
+            else:
+                logger.debug(f"💬 Interim: '{text}'")
                     
         except Exception as e:
-            logger.error(f"❌ Message handling error: {e}")
+            logger.error(f"❌ Message error: {e}")
             import traceback
             traceback.print_exc()
     
@@ -229,7 +257,7 @@ class DeepgramService:
         if self.dg_connection:
             try:
                 logger.info(f"Closing ({self.audio_sent_count} chunks)")
-                await self.dg_connection.close()
+                await self.dg_connection.finish()
                 self.dg_connection = None
                 
                 if self._connection_task:
