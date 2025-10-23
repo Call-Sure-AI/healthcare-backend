@@ -12,7 +12,6 @@ logger = logging.getLogger(__name__)
 class StreamService:
     """
     Manages Twilio Media Stream with proper audio buffering and mark tracking.
-    Ensures audio chunks are sent in order and tracks playback completion.
     """
     
     def __init__(self, websocket: WebSocket):
@@ -28,33 +27,23 @@ class StreamService:
         logger.info(f"StreamService -> Stream SID set: {stream_sid}")
     
     async def buffer(self, index: Optional[int], audio: str) -> None:
-        """
-        Buffer audio chunks and send them in order.
-        
-        Args:
-            index: Sequence number (None for immediate playback like greeting)
-            audio: Base64 encoded mulaw/8000 audio
-        """
-        # Escape hatch for intro message - send immediately
+        """Buffer audio chunks and send them in order."""
         if index is None:
             await self._send_audio(audio)
         elif index == self.expected_audio_index:
-            # This is the chunk we're waiting for
             await self._send_audio(audio)
             self.expected_audio_index += 1
             
-            # Check if we have buffered subsequent chunks
             while self.expected_audio_index in self.audio_buffer:
                 buffered_audio = self.audio_buffer.pop(self.expected_audio_index)
                 await self._send_audio(buffered_audio)
                 self.expected_audio_index += 1
         else:
-            # Out of order - buffer it
-            logger.debug(f"StreamService -> Buffering audio chunk {index} (expecting {self.expected_audio_index})")
+            logger.debug(f"StreamService -> Buffering audio chunk {index}")
             self.audio_buffer[index] = audio
     
     async def _send_audio(self, audio: str) -> None:
-        """Send audio to Twilio and attach a mark event for playback tracking."""
+        """Send audio to Twilio."""
         if not self.stream_sid:
             logger.error("StreamService -> Cannot send audio: stream_sid not set")
             return
@@ -64,7 +53,7 @@ class StreamService:
             return
         
         try:
-            # Send media message - FIXED: Proper JSON structure
+            # ✅ FIXED: Proper JSON structure
             media_message = {
                 "event": "media",
                 "streamSid": self.stream_sid,
@@ -76,7 +65,7 @@ class StreamService:
             await self.ws.send_text(json.dumps(media_message))
             logger.info(f"StreamService -> Sent audio ({len(audio)} chars)")
             
-            # Send mark message to track when this audio completes
+            # Send mark
             mark_label = str(uuid.uuid4())
             mark_message = {
                 "event": "mark",
@@ -87,7 +76,6 @@ class StreamService:
             }
             
             await self.ws.send_text(json.dumps(mark_message))
-            logger.debug(f"StreamService -> Sent mark: {mark_label}")
             
         except Exception as e:
             logger.error(f"StreamService -> Error sending audio: {e}")
