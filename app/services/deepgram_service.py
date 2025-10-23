@@ -106,15 +106,11 @@ class DeepgramService:
     async def _maintain_connection(self):
         """Maintain the Deepgram connection (runs in background)"""
         try:
-            # SDK 5.1.0: Pass ALL parameters matching TypeScript
+            # SDK 5.1.0: Only 3 required params in connect()
             async with self.client.listen.v2.connect(
                 model="nova-2-phonecall",
                 encoding="mulaw",
-                sample_rate=8000,
-                punctuate=True,
-                interim_results=True,
-                endpointing=200,
-                utterance_end_ms=1000
+                sample_rate=8000
             ) as connection:
                 
                 logger.info("✓ Connection context entered")
@@ -129,6 +125,19 @@ class DeepgramService:
                 connection.on("Error", self._on_error)
                 connection.on("Close", self._on_close)
                 logger.info("✓ Handlers registered")
+                
+                # SDK 5.1.0: Send additional options via send_options()
+                logger.info("Sending additional options...")
+                try:
+                    await connection.send_options({
+                        'punctuate': True,
+                        'interim_results': True,
+                        'endpointing': 200,
+                        'utterance_end_ms': 1000
+                    })
+                    logger.info("✓ Options sent")
+                except AttributeError:
+                    logger.warning("⚠ send_options not available")
                 
                 # Start listening
                 logger.info("Starting listening...")
