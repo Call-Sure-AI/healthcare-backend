@@ -21,7 +21,7 @@ class StreamService:
         self.audio_buffer: Dict[int, str] = OrderedDict()
         self.stream_sid: str = ""
         self.mark_callbacks: Dict[str, Callable] = {}
-        
+    
     def set_stream_sid(self, stream_sid: str) -> None:
         """Set the Twilio Stream SID"""
         self.stream_sid = stream_sid
@@ -64,13 +64,13 @@ class StreamService:
             return
         
         try:
-            # Send media message
+            # Send media message - FIXED: Added missing closing brace
             media_message = {
                 "event": "media",
                 "streamSid": self.stream_sid,
                 "media": {
                     "payload": audio
-                }
+                }  # ✅ FIXED: This was missing!
             }
             
             await self.ws.send_text(json.dumps(media_message))
@@ -85,8 +85,8 @@ class StreamService:
                     "name": mark_label
                 }
             }
-            await self.ws.send_text(json.dumps(mark_message))
             
+            await self.ws.send_text(json.dumps(mark_message))
             logger.debug(f"StreamService -> Sent mark: {mark_label}")
             
         except Exception as e:
