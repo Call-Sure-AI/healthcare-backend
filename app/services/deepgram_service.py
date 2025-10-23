@@ -1,6 +1,5 @@
 """
 Deepgram STT Service for Deepgram SDK 5.1.0
-Based on official SDK documentation
 """
 import asyncio
 import base64
@@ -47,14 +46,13 @@ class DeepgramService:
             os.environ['DEEPGRAM_API_KEY'] = api_key
             logger.info("✓ Environment variable set")
             
-            # Import for SDK 5.1.0
-            from deepgram import AsyncDeepgramClient, EventType
+            # Import for SDK 5.1.0 (no EventType in this version)
+            from deepgram import AsyncDeepgramClient
             
-            logger.info("✓ Imported AsyncDeepgramClient and EventType")
+            logger.info("✓ Imported AsyncDeepgramClient")
             
             # Create async client
             self.client = AsyncDeepgramClient()
-            self.EventType = EventType
             logger.info("✓ AsyncDeepgramClient created")
             
             self.initialized = True
@@ -82,9 +80,6 @@ class DeepgramService:
             logger.info("CONNECTING TO DEEPGRAM")
             logger.info("=" * 80)
             
-            # SDK 5.1.0: Use async context manager with connect()
-            logger.info("Creating v2 connection...")
-            
             # Start the connection task
             self._connection_task = asyncio.create_task(self._maintain_connection())
             
@@ -111,7 +106,7 @@ class DeepgramService:
     async def _maintain_connection(self):
         """Maintain the Deepgram connection (runs in background)"""
         try:
-            # Use async context manager - this keeps connection open
+            # Use async context manager
             async with self.client.listen.v2.connect(
                 model="nova-2-phonecall",
                 encoding="mulaw",
@@ -123,15 +118,15 @@ class DeepgramService:
                 # Store connection
                 self.dg_connection = connection
                 
-                # Register event handlers using EventType enum
+                # Register event handlers using STRING names (SDK 5.1.0)
                 logger.info("Registering handlers...")
-                connection.on(self.EventType.OPEN, self._on_open)
-                connection.on(self.EventType.MESSAGE, self._on_message)
-                connection.on(self.EventType.ERROR, self._on_error)
-                connection.on(self.EventType.CLOSE, self._on_close)
+                connection.on("Open", self._on_open)
+                connection.on("Message", self._on_message)
+                connection.on("Error", self._on_error)
+                connection.on("Close", self._on_close)
                 logger.info("✓ Handlers registered")
                 
-                # Start listening - CRITICAL for SDK 5.1.0
+                # Start listening - CRITICAL
                 logger.info("Starting listening...")
                 await connection.start_listening()
                 logger.info("✓ Listening started")
@@ -141,7 +136,7 @@ class DeepgramService:
                     await asyncio.sleep(0.1)
                     
         except Exception as e:
-            logger.error(f"❌ Connection maintenance error: {e}")
+            logger.error(f"❌ Connection error: {e}")
             import traceback
             traceback.print_exc()
             self.dg_connection = None
@@ -153,16 +148,11 @@ class DeepgramService:
         logger.info("=" * 80)
     
     def _on_message(self, *args, **kwargs):
-        """Handle incoming messages (EventType.MESSAGE)"""
+        """Handle incoming messages"""
         try:
-            # SDK 5.1.0: MESSAGE event contains the result
+            # Get result
             result = kwargs.get('result') or (args[0] if args else None)
             if not result:
-                return
-            
-            # Check message type
-            message_type = getattr(result, 'type', None)
-            if message_type and message_type != 'Results':
                 return
             
             # Extract transcript
