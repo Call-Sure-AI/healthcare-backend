@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Dict, List
+from typing import Dict, List, Optional
 from app.models.doctor import DoctorStatus
 
 class DoctorBase(BaseModel):
