@@ -4,14 +4,26 @@ from sqlalchemy.orm import Session
 from app.services.doctor_service import DoctorService
 from app.services.appointment_service import AppointmentService
 from app.models.leave import DoctorLeave
+from app.utils.symptom_mapper import extract_specialization_from_text, filter_doctors_by_specialization
+from app.schemas.appointment import AppointmentCreate
 
 AI_FUNCTIONS = [
     {
         "name": "get_available_doctors",
-        "description": "Get a list of all active doctors. Use this when the user wants to know which doctors are available.",
+        "description": (
+            "Get a list of available doctors filtered by patient's symptoms or specialization needs. "
+            "This function will automatically detect if the patient mentioned symptoms (e.g., 'chest pain', "
+            "'skin rash', 'child vaccination') and return relevant specialists. If no symptoms are mentioned "
+            "or no specialists match, it returns up to 5 general doctors."
+        ),
         "parameters": {
             "type": "object",
-            "properties": {},
+            "properties": {
+                "user_context": {
+                    "type": "string",
+                    "description": "The patient's reason for visit, symptoms, or any context from the conversation"
+                }
+            },
             "required": []
         }
     },
@@ -116,9 +128,9 @@ class AIToolsExecutor:
             traceback.print_exc()
             return {"success": False, "error": str(e)}
     
-    def get_available_doctors(self) -> Dict[str, Any]:
-        """Get list of active doctors who are not on leave"""
-        try:
+    def get_available_doctors(self, user_context: str = "") -> Dict[str, Any]:
+        """Get list of active doctors who are not on leave, filtered by symptoms/specialization"""
+        try:            
             print("Fetching available doctors...")
             
             # Get all ACTIVE doctors only
@@ -141,30 +153,43 @@ class AIToolsExecutor:
             active_doctors = []
             for doc in doctors:
                 is_on_leave = doc.doctor_id in on_leave_ids
-                
-                print(f"   - {doc.doctor_id}: {doc.name}, status={doc.status}, on_leave={is_on_leave}")
-                
                 if not is_on_leave:
                     active_doctors.append({
                         "doctor_id": doc.doctor_id,
                         "name": doc.name,
                         "degree": doc.degree,
-                        "specialization": "General Medicine"
+                        "specialization": doc.specialization or "General Medicine"
                     })
             
-            print(f"Available doctors: {len(active_doctors)}")
+            print(f"   Available doctors before filtering: {len(active_doctors)}")
             
-            if not active_doctors:
+            # ============ NEW: FILTER BY SYMPTOMS/SPECIALIZATION ============
+            detected_specialization = None
+            if user_context:
+                detected_specialization = extract_specialization_from_text(user_context)
+            
+            # Filter doctors by detected specialization
+            filtered_doctors = filter_doctors_by_specialization(
+                active_doctors,
+                detected_specialization
+            )
+            
+            print(f"   Final filtered doctors: {len(filtered_doctors)}")
+            # ============ END NEW LOGIC ============
+            
+            if not filtered_doctors:
                 return {
                     "success": False,
                     "message": "No doctors are currently available.",
-                    "doctors": []
+                    "doctors": [],
+                    "specialization_detected": detected_specialization
                 }
             
             return {
                 "success": True,
-                "count": len(active_doctors),
-                "doctors": active_doctors
+                "count": len(filtered_doctors),
+                "doctors": filtered_doctors,
+                "specialization_detected": detected_specialization
             }
             
         except Exception as e:
@@ -412,7 +437,6 @@ class AIToolsExecutor:
     ) -> Dict[str, Any]:
         """Book an appointment"""
         try:
-            from app.schemas.appointment import AppointmentCreate  # Import schema
             
             print(f"📝 Booking appointment for {patient_name}")
             
@@ -476,7 +500,6 @@ class AIToolsExecutor:
         If the first attempt fails, it tries the next available slot in that hour.
         """
         try:
-            from app.schemas.appointment import AppointmentCreate
 
             print(f"Attempting to book for {patient_name} in time range: '{time_range}'")
             

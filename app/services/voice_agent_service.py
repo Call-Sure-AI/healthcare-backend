@@ -177,19 +177,32 @@ class VoiceAgentService:
         if function_name == "get_available_doctors":
             if result.get("success"):
                 doctors = result.get("doctors", [])
+                specialization = result.get("specialization_detected")
+                
                 if not doctors:
                     return "I'm sorry, no doctors are currently available. Would you like me to help you with something else?"
                 
-                # Format doctor list
+                # Build response based on specialization detection
+                prefix = ""
+                if specialization:
+                    prefix = f"Based on your symptoms, I found {len(doctors)} {specialization} specialist{'s' if len(doctors) > 1 else ''}. "
+                
+                # Format doctor list (max 5)
                 if len(doctors) == 1:
                     doc = doctors[0]
-                    return f"We have {doc['name']} ({doc['degree']}) available. Would you like to book an appointment with Dr. {doc['name']}?"
+                    return f"{prefix}We have {doc['name']} available. Would you like to book an appointment?"
+                
                 elif len(doctors) == 2:
-                    return f"We have {doctors[0]['name']} and {doctors[1]['name']} available. Which doctor would you prefer?"
+                    return f"{prefix}We have {doctors[0]['name']} and {doctors[1]['name']} available. Which doctor would you prefer?"
+                
+                elif len(doctors) <= 5:
+                    doctor_names = ", ".join([doc['name'] for doc in doctors[:-1]])
+                    last_doctor = doctors[-1]['name']
+                    return f"{prefix}We have {doctor_names}, and {last_doctor} available. Which doctor would you like to see?"
+                
                 else:
-                    doctor_names = ", ".join([f"{doc['name']}" for doc in doctors[:-1]])
-                    last_doctor = f"{doctors[-1]['name']}"
-                    return f"We have {doctor_names}, and {last_doctor} available. Which doctor would you like to see?"
+                    # Should not happen due to filtering, but just in case
+                    return f"{prefix}We have {len(doctors)} doctors available. Could you tell me which doctor you'd prefer?"
             else:
                 return "I'm having trouble fetching the doctor list at the moment. Could you try again?"
         
@@ -345,14 +358,24 @@ class VoiceAgentService:
             print(f"   Result success: {function_result.get('success', False)}")
             
             # Store doctor list in session after get_available_doctors
-            if function_name == "get_available_doctors" and function_result.get("success"):
-                doctors = function_result.get("doctors", [])
-                if doctors:
-                    redis_service.update_session(call_sid, {
-                        "available_doctors": doctors
-                    })
-                    print(f"Stored {len(doctors)} doctors in session")
+            if function_name == "get_available_doctors":
+                # Get conversation history to extract symptoms/context
+                conversation_history = session.get("conversation_history", [])
+                user_context = ""
+                
+                # Get last 2 user messages
+                for msg in conversation_history[-4:]:
+                    if msg.get("role") == "user":
+                        user_context += " " + msg.get("content", "")
             
+            arguments["user_context"] = user_context.strip()
+            print(f"📋 User context for doctor filtering: '{user_context}'")
+
+            function_result = self.ai_tools.execute_function(
+                function_name,
+                arguments
+            )
+
             # Store selected doctor after successful get_available_slots
             if function_name == "get_available_slots" and function_result.get("success"):
                 doctor_id = arguments.get("doctor_id")
