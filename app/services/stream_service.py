@@ -30,8 +30,7 @@ class StreamService:
         self.stream_sid = stream_sid
         logger.info(f"StreamService -> Stream SID set: {stream_sid}")
 
-    async def buffer(self, index: Optional[int], audio_b64: str) -> None:
-        """Buffer audio chunks and send them in order."""
+    """async def buffer(self, index: Optional[int], audio_b64: str) -> None:
         if index is None:
             await self._send_audio(audio_b64)
         elif index == self.expected_audio_index:
@@ -43,7 +42,7 @@ class StreamService:
                 self.expected_audio_index += 1
         else:
             logger.debug(f"StreamService -> Buffering audio chunk index={index}")
-            self.audio_buffer[index] = audio_b64
+            self.audio_buffer[index] = audio_b64"""
 
     async def clear(self) -> None:
         """Send Twilio 'clear' to flush buffered audio before a new utterance."""
