@@ -64,7 +64,7 @@ class VoiceAgentService:
         try:
             import time
             logger.info(f"\n{'='*80}")
-            logger.info(f"💬 Processing speech: '{user_speech}'")
+            logger.info(f"💬 Processing speech: '{user_text}'")
             logger.info(f"   Call SID: {call_sid}")
             start_time = time.time()
 
