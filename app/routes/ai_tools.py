@@ -130,60 +130,40 @@ class AIToolsExecutor:
     
     def get_available_doctors(self, user_context: str = "") -> Dict[str, Any]:
         """Get list of active doctors who are not on leave, filtered by symptoms/specialization"""
-        try:            
-            print("Fetching available doctors...")
+        try:
+            print(f"\n{'='*80}")
+            print(f"🔍 get_available_doctors called")
+            print(f"   User context: '{user_context}'")
+            print(f"   Context length: {len(user_context)} chars")
+            print(f"{'='*80}\n")
             
-            # Get all ACTIVE doctors only
-            doctors = DoctorService.get_all_active_doctors(self.db)
-            print(f"   Total ACTIVE doctors in DB: {len(doctors)}")
+            # ... your existing doctor fetching code ...
             
-            # Get today's date
-            today = date.today()
+            # Show specialization distribution
+            from collections import Counter
+            spec_dist = Counter(d["specialization"] for d in active_doctors)
+            print(f"   📋 Specialization distribution:")
+            for spec, count in spec_dist.most_common():
+                print(f"      - {spec}: {count}")
             
-            # Get doctors who are on leave today
-            doctors_on_leave = self.db.query(DoctorLeave.doctor_id).filter(
-                DoctorLeave.start_date <= today,
-                DoctorLeave.end_date >= today
-            ).all()
-            
-            on_leave_ids = [leave.doctor_id for leave in doctors_on_leave]
-            print(f"   Doctors on leave: {len(on_leave_ids)}")
-            
-            # Filter active doctors not on leave
-            active_doctors = []
-            for doc in doctors:
-                is_on_leave = doc.doctor_id in on_leave_ids
-                if not is_on_leave:
-                    active_doctors.append({
-                        "doctor_id": doc.doctor_id,
-                        "name": doc.name,
-                        "degree": doc.degree,
-                        "specialization": doc.specialization or "General Medicine"
-                    })
-            
-            print(f"   Available doctors before filtering: {len(active_doctors)}")
-            
-            # ============ NEW: FILTER BY SYMPTOMS/SPECIALIZATION ============
+            # Detect and filter
             detected_specialization = None
             if user_context:
+                print(f"\n🔍 Detecting specialization from: '{user_context}'")
                 detected_specialization = extract_specialization_from_text(user_context)
+                print(f"🎯 Detected: {detected_specialization or 'None'}")
+            else:
+                print(f"⚠️  No user context provided")
             
-            # Filter doctors by detected specialization
             filtered_doctors = filter_doctors_by_specialization(
                 active_doctors,
                 detected_specialization
             )
             
-            print(f"   Final filtered doctors: {len(filtered_doctors)}")
-            # ============ END NEW LOGIC ============
-            
-            if not filtered_doctors:
-                return {
-                    "success": False,
-                    "message": "No doctors are currently available.",
-                    "doctors": [],
-                    "specialization_detected": detected_specialization
-                }
+            print(f"\n   🎯 Final result: {len(filtered_doctors)} doctors")
+            for doc in filtered_doctors:
+                print(f"      - {doc['name']} ({doc['specialization']})")
+            print(f"\n{'='*80}\n")
             
             return {
                 "success": True,
@@ -193,10 +173,12 @@ class AIToolsExecutor:
             }
             
         except Exception as e:
-            print(f"Error in get_available_doctors: {e}")
+            print(f"❌ Error in get_available_doctors: {e}")
             import traceback
             traceback.print_exc()
             return {"success": False, "error": str(e), "doctors": []}
+
+
 
     def get_appointment_details(self, patient_name: str, patient_phone: str) -> Dict[str, Any]:
         """Executor for fetching appointment details."""

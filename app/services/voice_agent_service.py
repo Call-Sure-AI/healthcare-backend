@@ -59,6 +59,12 @@ class VoiceAgentService:
     async def process_user_speech(self, call_sid: str, user_text: str) -> Dict[str, Any]:
         """Process user speech and generate AI response"""
         try:
+            import time
+            logger.info(f"\n{'='*80}")
+            logger.info(f"💬 Processing speech: '{user_speech}'")
+            logger.info(f"   Call SID: {call_sid}")
+            start_time = time.time()
+
             print(f"💬 Processing speech: '{user_text}'")
             
             session = redis_service.get_session(call_sid)
@@ -99,7 +105,11 @@ class VoiceAgentService:
             response_text = result.get("response", "I'm sorry, could you please repeat that?")
 
             redis_service.append_to_conversation(call_sid, "assistant", response_text)
-            
+
+            duration = time.time() - start_time
+            logger.info(f"✓ Speech processing complete ({duration:.2f}s)")
+            logger.info(f"{'='*80}\n") 
+                       
             return {
                 "success": True,
                 "response": response_text,
@@ -308,19 +318,22 @@ class VoiceAgentService:
             if function_name == "get_available_doctors":
                 # Get conversation history to extract symptoms/context
                 conversation_history = session.get("conversation_history", [])
-                user_context = ""
                 
-                # Get ALL user messages to build context
+                # Build context from ALL user messages in this conversation
+                user_messages = []
                 for msg in conversation_history:
                     if msg.get("role") == "user":
-                        user_context += " " + msg.get("content", "")
+                        user_messages.append(msg.get("content", ""))
                 
-                # Add user_context to arguments BEFORE executing function
-                arguments["user_context"] = user_context.strip()
-                print(f"📋 User context for doctor filtering: '{user_context.strip()}'")
-            # ============ END FIX 1 ============
+                # Combine all user messages
+                user_context = " ".join(user_messages).strip()
+                
+                # OVERRIDE whatever OpenAI sent - use our extracted context
+                arguments["user_context"] = user_context
+                
+                print(f"📋 User context for doctor filtering: '{user_context}'")
+                print(f"   (Extracted from {len(user_messages)} user messages)")
 
-            # ============ DOCTOR ID RESOLUTION (only for these functions) ============
             if function_name in ["get_available_slots", "book_appointment", "get_doctor_schedule"]:
                 doctor_id = arguments.get("doctor_id", "")
                 

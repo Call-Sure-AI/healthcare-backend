@@ -66,17 +66,17 @@ async def handle_full_transcript(
         return
     
     try:
-        # ========== THIS IS WHERE THE MAGIC HAPPENS ==========
-        # VoiceAgentService.process_user_speech() will:
-        # 1. Call OpenAI GPT-4 with function calling
-        # 2. Execute AI tools from ai_tools.py
-        # 3. Generate natural language response
+        # ========== CALL AI AGENT ==========
+        import time
+        ai_start_time = time.time()
         
         logger.info("🤖 Calling VoiceAgentService.process_user_speech()...")
-        
         ai_result = await agent.process_user_speech(call_sid, transcript)
         
+        ai_duration = time.time() - ai_start_time
+        
         logger.info(f"   AI Processing complete!")
+        logger.info(f"   ⏱️  Duration: {ai_duration:.2f}s")
         logger.info(f"   Success: {ai_result.get('success', False)}")
         logger.info(f"   Function called: {ai_result.get('function_called', False)}")
         
@@ -87,7 +87,6 @@ async def handle_full_transcript(
             logger.info(f"   🔧 Result: {function_result.get('success', False)}")
         
         response_text = ai_result.get("response")
-        
         if not response_text:
             logger.warning("   ⚠ No response from AI, using fallback")
             response_text = "I'm sorry, could you please repeat that?"
@@ -95,20 +94,36 @@ async def handle_full_transcript(
         logger.info(f"🎯 AI Response: '{response_text}'")
         logger.info(f"   Response length: {len(response_text)} chars")
         
-        # Generate and stream TTS audio
+        # ========== GENERATE AND STREAM TTS ==========
         logger.info("🎤 Generating TTS audio...")
+        tts_start_time = time.time()
+        
         audio_index = 0
         audio_generated = False
+        total_audio_bytes = 0
+        
+        # Clear any buffered audio first
         await stream_service.clear()
+        
+        # Generate audio
         async for audio_b64 in tts_service.generate(response_text):
             if audio_b64:
-                # Send audio to Twilio stream
+                # Decode to check size
+                audio_bytes = base64.b64decode(audio_b64)
+                total_audio_bytes += len(audio_bytes)
+                
+                # Send audio to Twilio stream (with heartbeat monitoring)
                 await stream_service.buffer(audio_index, audio_b64)
                 audio_index += 1
                 audio_generated = True
         
+        tts_duration = time.time() - tts_start_time
+        
         if audio_generated:
-            logger.info(f"✓ Audio streamed successfully ({audio_index} chunks)")
+            logger.info(f"✓ Audio generation & streaming complete:")
+            logger.info(f"   📊 Chunks: {audio_index}")
+            logger.info(f"   📊 Total bytes: {total_audio_bytes}")
+            logger.info(f"   ⏱️  Time: {tts_duration:.2f}s")
         else:
             logger.error("❌ No audio was generated!")
         
@@ -121,11 +136,15 @@ async def handle_full_transcript(
         # Send error response to user
         try:
             error_message = "I apologize, I'm having trouble processing that. Could you please try again?"
+            logger.info("🔧 Sending error message to user...")
+            
             async for audio_b64 in tts_service.generate(error_message):
                 if audio_b64:
                     await stream_service.buffer(None, audio_b64)
-        except:
-            pass
+            
+            logger.info("✓ Error message sent")
+        except Exception as err:
+            logger.error(f"✗ Failed to send error message: {err}")
 
 
 @router.post("/incoming")

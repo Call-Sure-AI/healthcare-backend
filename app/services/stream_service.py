@@ -57,25 +57,49 @@ class StreamService:
         logger.info("StreamService -> Sent clear")
 
     async def _send_audio(self, audio_b64: str) -> None:
-        """Decode and send audio as ~20 ms mu-law frames, then send a trailing mark."""
+        """
+        Decode and send audio as ~20 ms mu-law frames with heartbeat monitoring.
+        Detects WebSocket disconnection during playback.
+        """
         if not self.stream_sid:
             logger.error("StreamService -> Cannot send audio: streamSid not set")
             return
+        
         if not audio_b64:
             logger.error("StreamService -> Cannot send empty audio")
             return
-
+        
         try:
-            # 1) Decode entire utterance (must be raw mu-law/8000 with no headers)
+            import time
+            from starlette.websockets import WebSocketState
+            
+            # Decode entire utterance (must be raw mu-law/8000 with no headers)
             audio_bytes = base64.b64decode(audio_b64)
-
-            # 2) Send frames in real-time order
             total = len(audio_bytes)
+            
+            # Calculate expected playback duration
+            audio_duration_sec = total / SAMPLE_RATE
+            
+            logger.info(f"StreamService -> Starting audio playback:")
+            logger.info(f"   📊 Size: {total} bytes")
+            logger.info(f"   ⏱️  Duration: ~{audio_duration_sec:.2f}s")
+            
+            start_time = time.time()
             sent = 0
+            frames_sent = 0
+            
+            # Send frames in real-time order with heartbeat monitoring
             while sent < total:
+                # Check WebSocket connection every 100 frames (~2 seconds)
+                if frames_sent % 100 == 0 and frames_sent > 0:
+                    if self.ws.client_state != WebSocketState.CONNECTED:
+                        logger.warning(f"⚠️  WebSocket disconnected during playback (after {frames_sent} frames)")
+                        break
+                
                 frame = audio_bytes[sent: sent + FRAME_BYTES]
                 if not frame:
                     break
+                
                 payload = base64.b64encode(frame).decode("ascii")
                 media_message = {
                     "event": "media",
@@ -84,24 +108,40 @@ class StreamService:
                         "payload": payload
                     }
                 }
+                
                 await self.ws.send_text(json.dumps(media_message))
                 sent += len(frame)
-
+                frames_sent += 1
+                
                 # ~20 ms pacing per frame
                 await asyncio.sleep(FRAME_MS / 1000.0)
-
-            logger.info(f"StreamService -> Sent audio frames (~{total} bytes total)")
-
-            # 3) Trailing mark so app knows when Twilio finished playback
+            
+            elapsed_time = time.time() - start_time
+            
+            logger.info(f"StreamService -> Audio sent:")
+            logger.info(f"   ✓ Frames: {frames_sent}")
+            logger.info(f"   ✓ Bytes: {sent}/{total}")
+            logger.info(f"   ✓ Time: {elapsed_time:.2f}s")
+            
+            # Send trailing mark so app knows when Twilio finished playback
             mark_label = str(uuid.uuid4())
             mark_message = {
                 "event": "mark",
                 "streamSid": self.stream_sid,
                 "mark": {"name": mark_label},
             }
+            
             await self.ws.send_text(json.dumps(mark_message))
-
+            
+            # Wait for audio to finish playing (add small buffer)
+            remaining_time = audio_duration_sec - elapsed_time
+            if remaining_time > 0:
+                await asyncio.sleep(remaining_time + 0.1)
+                logger.info(f"✓ Audio playback complete")
+            
         except Exception as e:
             logger.error(f"StreamService -> Error sending audio: {e}")
-            import traceback; traceback.print_exc()
+            import traceback
+            traceback.print_exc()
             raise
+
