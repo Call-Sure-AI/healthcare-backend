@@ -22,7 +22,7 @@ from app.models.call_session import CallSession
 
 # Import new services
 from app.services.stream_service import StreamService
-from app.services.tts_service import TTSService
+from app.services.elevenlabs_service import elevenlabs_service
 from app.services.deepgram_service import DeepgramManager
 
 # Setup logging
@@ -281,9 +281,9 @@ async def websocket_stream(websocket: WebSocket):
         stream_service = StreamService(websocket)
         logger.info("✓ StreamService initialized")
         
-        logger.info("6. Initializing TTSService...")
-        tts_service = TTSService()
-        logger.info("✓ TTSService initialized")
+        logger.info("6. Initializing Elevenlabs TTSService...")
+        tts_service = elevenlabs_service
+        logger.info("✓ Elevenlabs initialized")
         
         logger.info("7. Initializing DeepgramManager...")
         deepgram_manager = DeepgramManager()

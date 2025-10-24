@@ -68,15 +68,21 @@ class VoiceAgentService:
             logger.info(f"   Call SID: {call_sid}")
             start_time = time.time()
 
+            # ============ CRITICAL: Add user message to history FIRST ============
             redis_service.append_to_conversation(call_sid, "user", user_text)
             logger.info(f"✓ Added user message to conversation history")
             
-            print(f"💬 Processing speech: '{user_text}'")
-            
+            # Get updated session (now includes the user message)
             session = redis_service.get_session(call_sid)
             if not session:
-                return {"success": False, "error": "Session not found"}
+                logger.error(f"❌ No session found for {call_sid}")
+                return {
+                    "success": False,
+                    "error": "Session not found",
+                    "response": "I'm sorry, I lost track of our conversation. Could you start again?"
+                }
 
+            # ============ AUTO-DETECT DOCTOR FROM PREVIOUS CONTEXT ============
             user_lower = user_text.lower()
             available_doctors = session.get("available_doctors", [])
 
@@ -91,10 +97,12 @@ class VoiceAgentService:
                                 "selected_doctor_id": doctor["doctor_id"],
                                 "selected_doctor_name": doctor["name"]
                             })
-                            print(f"Auto-detected doctor: {doctor['name']} ({doctor['doctor_id']})")
+                            logger.info(f"✓ Auto-detected doctor: {doctor['name']} ({doctor['doctor_id']})")
                             break
 
+            # ============ GET CONVERSATION HISTORY AND CALL OPENAI ============
             conversation_history = session.get("conversation_history", [])
+            logger.info(f"📋 Conversation history: {len(conversation_history)} messages")
             
             ai_functions = get_ai_functions()
             result = await openai_service.process_user_input(
@@ -103,16 +111,27 @@ class VoiceAgentService:
                 available_functions=ai_functions,
             )
 
+            # ============ HANDLE FUNCTION CALLS ============
             if result.get("function_call"):
-                return await self._handle_function_call(call_sid, result, session)
+                logger.info(f"🔧 Function call detected: {result.get('function_call', {}).get('name')}")
+                function_result = await self._handle_function_call(call_sid, result, session)
+                
+                duration = time.time() - start_time
+                logger.info(f"✓ Function call processing complete ({duration:.2f}s)")
+                logger.info(f"{'='*80}\n")
+                
+                return function_result
 
+            # ============ HANDLE REGULAR RESPONSE ============
             response_text = result.get("response", "I'm sorry, could you please repeat that?")
+            logger.info(f"💬 AI Response: '{response_text[:100]}...'")
 
+            # Add assistant response to conversation
             redis_service.append_to_conversation(call_sid, "assistant", response_text)
 
             duration = time.time() - start_time
             logger.info(f"✓ Speech processing complete ({duration:.2f}s)")
-            logger.info(f"{'='*80}\n") 
+            logger.info(f"{'='*80}\n")
 
             return {
                 "success": True,
@@ -121,7 +140,11 @@ class VoiceAgentService:
             }
             
         except Exception as e:
-            print(f"Error processing speech: {e}")
+            logger.error(f"❌ Error processing speech: {e}")
+            logger.error(f"   User text was: '{user_text}'")
+            import traceback
+            traceback.print_exc()
+            
             return {
                 "success": False,
                 "error": str(e),
