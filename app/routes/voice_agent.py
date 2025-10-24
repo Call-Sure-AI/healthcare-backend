@@ -39,7 +39,7 @@ async def handle_full_transcript(
     call_sid: str,
     transcript: str,
     stream_service: StreamService,
-    tts_service: TTSService
+    tts_service: elevenlabs_service
 ):
     """
     Callback triggered by Deepgram when user finishes speaking.
