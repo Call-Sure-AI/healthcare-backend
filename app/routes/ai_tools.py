@@ -111,7 +111,7 @@ class AIToolsExecutor:
             print(f"Executing function: {function_name}")
             
             if function_name == "get_available_doctors":
-                return self.get_available_doctors()
+                return self.get_available_doctors(**arguments)
             elif function_name == "get_available_slots":
                 return self.get_available_slots(**arguments)
             elif function_name == "book_appointment":
@@ -128,7 +128,7 @@ class AIToolsExecutor:
             traceback.print_exc()
             return {"success": False, "error": str(e)}
     
-    def get_available_doctors(self, user_context: str = "") -> Dict[str, Any]:
+    def get_available_doctors(self, user_context: str) -> Dict[str, Any]:
         """Get list of active doctors who are not on leave, filtered by symptoms/specialization"""
         try:
             from app.utils.symptom_mapper import extract_specialization_from_text, filter_doctors_by_specialization

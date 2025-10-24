@@ -138,10 +138,11 @@ class StreamService:
             # ============ OPTIONAL: Wait for Twilio to finish playing ============
             # Only wait if you need to prevent user from interrupting
             # For more responsive agent, comment this out
-            remaining_time = audio_duration_sec - elapsed_time
-            if remaining_time > 0.1:  # Only wait if significant time remaining
-                await asyncio.sleep(remaining_time)
-                logger.info(f"✓ Audio playback complete")
+            #remaining_time = audio_duration_sec - elapsed_time
+            #if remaining_time > 0.1:  # Only wait if significant time remaining
+            #    await asyncio.sleep(remaining_time)
+            #    logger.info(f"✓ Audio playback complete")
+            logger.info(f"✓ Audio sent ({frames_sent} frames, {sent} bytes)")
             
         except Exception as e:
             logger.error(f"StreamService -> Error sending audio: {e}")
