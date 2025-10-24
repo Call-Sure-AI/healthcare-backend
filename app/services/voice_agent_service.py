@@ -68,7 +68,7 @@ class VoiceAgentService:
             logger.info(f"   Call SID: {call_sid}")
             start_time = time.time()
 
-            redis_service.append_to_conversation(call_sid, "user", user_speech)
+            redis_service.append_to_conversation(call_sid, "user", user_text)
             logger.info(f"✓ Added user message to conversation history")
             
             print(f"💬 Processing speech: '{user_text}'")
