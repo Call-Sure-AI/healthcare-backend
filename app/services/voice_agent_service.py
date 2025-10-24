@@ -10,6 +10,9 @@ from app.utils.validators import validate_phone_number, parse_patient_name
 from app.models.call_session import CallSession
 from app.config.voice_config import voice_config
 from collections import defaultdict
+import logging
+
+logger = logging.getLogger(__name__)
 
 class VoiceAgentService:
     """Main service for handling voice agent conversations"""
@@ -109,7 +112,7 @@ class VoiceAgentService:
             duration = time.time() - start_time
             logger.info(f"✓ Speech processing complete ({duration:.2f}s)")
             logger.info(f"{'='*80}\n") 
-                       
+
             return {
                 "success": True,
                 "response": response_text,
