@@ -14,25 +14,25 @@ class TwilioService:
         self.client = Client(self.account_sid, self.auth_token)
     
     def create_welcome_response(self, websocket_url: str) -> str:
-        """
-        Create initial TwiML response with WebSocket stream
-        """
         response = VoiceResponse()
 
-        response.start().stream(
-            url=websocket_url,
-            track="both_tracks"
-        )
+        # Option A: Let your app handle all audio over the stream (recommended)
+        with response.connect() as connect:
+            connect.stream(
+                url=websocket_url,
+                track="both_tracks"  # allow inbound + outbound on the same stream
+            )
 
-        response.say(
-            f"Hello! Thank you for calling {voice_config.CLINIC_NAME}. "
-            "I'm here to help you book an appointment. How may I assist you today?",
-            voice="Polly.Aditi",  # Indian English voice
-            language="en-IN"
-        )
+        # Option B: If you want Twilio to speak first, do it BEFORE connect:
+        # response.say(
+        #     f"Hello! Thank you for calling {voice_config.CLINIC_NAME}. "
+        #     "I'm here to help you book an appointment. How may I assist you today?",
+        #     voice="Polly.Aditi",
+        #     language="en-IN",
+        # )
+        # with response.connect() as connect:
+        #     connect.stream(url=websocket_url, track="both_tracks")
 
-        response.pause(length=2)
-        
         return str(response)
     
     def create_gather_response(self, text: str, action_url: str) -> str:
