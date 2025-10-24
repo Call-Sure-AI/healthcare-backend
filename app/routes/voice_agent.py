@@ -34,17 +34,12 @@ router = APIRouter(prefix="/voice", tags=["Voice Agent"])
 # Global context storage
 call_context: Dict[str, Dict[str, Any]] = {}
 
-
 async def handle_full_transcript(
     call_sid: str,
     transcript: str,
     stream_service: StreamService,
     tts_service: TTSService
 ):
-    """
-    Callback triggered by Deepgram when user finishes speaking.
-    This is where the AI processes speech and calls tools!
-    """
     logger.info("=" * 80)
     logger.info(f"💬 TRANSCRIPT RECEIVED")
     logger.info(f"   Call SID: {call_sid}")
@@ -66,16 +61,8 @@ async def handle_full_transcript(
         return
     
     try:
-        # ========== THIS IS WHERE THE MAGIC HAPPENS ==========
-        # VoiceAgentService.process_user_speech() will:
-        # 1. Call OpenAI GPT-4 with function calling
-        # 2. Execute AI tools from ai_tools.py
-        # 3. Generate natural language response
-        
         logger.info("🤖 Calling VoiceAgentService.process_user_speech()...")
-        
         ai_result = await agent.process_user_speech(call_sid, transcript)
-        
         logger.info(f"   AI Processing complete!")
         logger.info(f"   Success: {ai_result.get('success', False)}")
         logger.info(f"   Function called: {ai_result.get('function_called', False)}")
@@ -87,14 +74,19 @@ async def handle_full_transcript(
             logger.info(f"   🔧 Result: {function_result.get('success', False)}")
         
         response_text = ai_result.get("response")
-        
         if not response_text:
             logger.warning("   ⚠ No response from AI, using fallback")
             response_text = "I'm sorry, could you please repeat that?"
         
         logger.info(f"🎯 AI Response: '{response_text}'")
         logger.info(f"   Response length: {len(response_text)} chars")
-        
+
+        # NEW: Clear Twilio buffer before speaking a new turn
+        try:
+            await stream_service.clear()
+        except Exception as e:
+            logger.warning(f"⚠ Clear before TTS failed: {e}")
+
         # Generate and stream TTS audio
         logger.info("🎤 Generating TTS audio...")
         audio_index = 0
@@ -102,13 +94,13 @@ async def handle_full_transcript(
         
         async for audio_b64 in tts_service.generate(response_text):
             if audio_b64:
-                # Send audio to Twilio stream
+                # Send audio to Twilio stream (background frame sender handles pacing)
                 await stream_service.buffer(audio_index, audio_b64)
                 audio_index += 1
                 audio_generated = True
         
         if audio_generated:
-            logger.info(f"✓ Audio streamed successfully ({audio_index} chunks)")
+            logger.info(f"✓ Audio queued for streaming ({audio_index} chunks)")
         else:
             logger.error("❌ No audio was generated!")
         
@@ -117,16 +109,15 @@ async def handle_full_transcript(
     except Exception as e:
         logger.error(f"✗ Error in transcript handler: {e}")
         traceback.print_exc()
-        
         # Send error response to user
         try:
             error_message = "I apologize, I'm having trouble processing that. Could you please try again?"
+            await stream_service.clear()  # NEW: ensure clean buffer for error line
             async for audio_b64 in tts_service.generate(error_message):
                 if audio_b64:
                     await stream_service.buffer(None, audio_b64)
         except:
             pass
-
 
 @router.post("/incoming")
 async def handle_incoming_call(
@@ -139,40 +130,52 @@ async def handle_incoming_call(
     try:
         logger.info("\n" + "=" * 80)
         logger.info(f"📞 Incoming call: {CallSid} from {From}")
-        
+
         response = VoiceResponse()
-        
+
         if not voice_config.VOICE_AGENT_ENABLED:
             response.say("Assistant unavailable.", voice="Polly.Amy", language="en-GB")
             response.hangup()
             return Response(content=str(response), media_type="application/xml")
-        
-        # Build WebSocket URL
-        websocket_url = f"wss://{request.url.hostname}/api/v1/voice/stream?call_sid={CallSid}"
+
+        # Use a known public base to avoid proxy/host mismatches
+        public_base = getattr(voice_config, "VOICE_PUBLIC_BASE_URL", None)
+        if public_base:
+            # VOICE_PUBLIC_BASE_URL should be like: health.callsure.ai
+            ws_host = public_base.strip().replace("https://", "").replace("http://", "")
+        else:
+            # Fallback to the host Twilio hit for the webhook
+            ws_host = request.headers.get("host") or request.url.hostname
+
+        websocket_url = f"wss://{ws_host}/api/v1/voice/stream?call_sid={CallSid}"
         logger.info(f"🔌 WebSocket URL: {websocket_url}")
-        
-        # Connect to WebSocket stream
-        connect = Connect()
-        connect.stream(url=websocket_url)
-        response.append(connect)
-        
-        # Keep call alive
+
+        # 1) Force-answer immediately so the caller stops ringing
+        response.say(
+            f"Please hold while we connect you to {voice_config.CLINIC_NAME}.",
+            voice="Polly.Aditi",
+            language="en-IN"
+        )
+
+        # 2) Start bidirectional media stream
+        with response.connect() as connect:
+            connect.stream(url=websocket_url, track="both_tracks")
+
+        # 3) Keep call alive if the stream closes
         response.pause(length=60)
-        
+
         logger.info("✓ TwiML response generated")
         logger.info("=" * 80)
-        
         return Response(content=str(response), media_type="application/xml")
-        
+
     except Exception as e:
         logger.error(f"✗ Error handling incoming call: {e}")
         traceback.print_exc()
-        
+
         twiml = VoiceResponse()
         twiml.say("An error occurred.", voice="Polly.Amy", language="en-GB")
         twiml.hangup()
         return Response(content=str(twiml), media_type="application/xml")
-
 
 @router.websocket("/stream")
 async def websocket_stream(websocket: WebSocket):
@@ -180,8 +183,6 @@ async def websocket_stream(websocket: WebSocket):
     Handle Twilio Media Stream WebSocket connection.
     Integrates: Deepgram STT -> VoiceAgentService -> AI Tools -> TTS -> Twilio
     """
-    
-    # Step 1: Accept WebSocket
     try:
         logger.info("\n" + "=" * 80)
         logger.info("1. Accepting WebSocket...")
@@ -192,37 +193,28 @@ async def websocket_stream(websocket: WebSocket):
         traceback.print_exc()
         return
     
-    # Step 2: Get call_sid from query params or wait for start event
     call_sid = websocket.query_params.get("call_sid")
     logger.info(f"2. Query parameters: {dict(websocket.query_params)}")
     
     first_message_data = None
     if not call_sid:
         logger.warning("⚠ No call_sid in query params, waiting for Twilio events...")
-        
         try:
-            # Wait for 'connected' and 'start' events
             max_attempts = 3
             for attempt in range(max_attempts):
-                message = await asyncio.wait_for(
-                    websocket.receive_text(),
-                    timeout=10.0
-                )
+                message = await asyncio.wait_for(websocket.receive_text(), timeout=10.0)
                 data = json.loads(message)
                 event_type = data.get("event")
-                
                 logger.info(f"   Received event #{attempt + 1}: {event_type}")
                 
                 if event_type == "connected":
                     logger.info("   ✓ Received 'connected' event")
                     continue
-                    
                 elif event_type == "start":
                     call_sid = data.get("start", {}).get("callSid")
                     first_message_data = data
                     logger.info(f"✓ Extracted call_sid: {call_sid}")
                     break
-                    
         except asyncio.TimeoutError:
             logger.error("✗ Timeout waiting for start event")
             await websocket.close(code=1008)
@@ -239,7 +231,6 @@ async def websocket_stream(websocket: WebSocket):
     
     logger.info(f"3. Call SID validated: {call_sid}")
     
-    # Step 3: Initialize database
     db = None
     try:
         logger.info("4. Creating database session...")
@@ -250,7 +241,6 @@ async def websocket_stream(websocket: WebSocket):
         await websocket.close()
         return
     
-    # Step 4: Initialize services
     stream_service = None
     tts_service = None
     deepgram_manager = None
@@ -260,8 +250,10 @@ async def websocket_stream(websocket: WebSocket):
     try:
         logger.info("5. Initializing StreamService...")
         stream_service = StreamService(websocket)
-        logger.info("✓ StreamService initialized")
-        
+        # NEW: Start background frame sender immediately
+        await stream_service.start()
+        logger.info("✓ StreamService initialized and frame sender started")
+
         logger.info("6. Initializing TTSService...")
         tts_service = TTSService()
         logger.info("✓ TTSService initialized")
@@ -270,13 +262,13 @@ async def websocket_stream(websocket: WebSocket):
         deepgram_manager = DeepgramManager()
         logger.info("✓ DeepgramManager initialized")
         
-        # ========== INITIALIZE VOICE AGENT SERVICE ==========
+        # Initialize Voice Agent
         logger.info("8. Initializing VoiceAgentService...")
         agent = VoiceAgentService(db)
         await agent.initiate_call(call_sid, "WebSocket", "WebSocket")
         logger.info("✓ VoiceAgentService initialized (AI Tools ready!)")
         
-        # ========== INITIALIZE DEEPGRAM STT ==========
+        # Initialize Deepgram STT
         logger.info("9. Initializing Deepgram STT...")
         try:
             deepgram_service = deepgram_manager.create_connection(
@@ -285,8 +277,6 @@ async def websocket_stream(websocket: WebSocket):
                     handle_full_transcript(call_sid, transcript, stream_service, tts_service)
                 )
             )
-
-            
             if deepgram_service:
                 connected = await deepgram_service.connect()
                 if connected:
@@ -316,43 +306,46 @@ async def websocket_stream(websocket: WebSocket):
         has_sent_greeting = False
         message_count = 0
         
-        # Process buffered start event if we have it
+        # Process buffered start event if present
         if first_message_data and first_message_data.get("event") == "start":
             logger.info("📦 Processing buffered start event...")
             stream_sid = first_message_data.get("streamSid")
             stream_service.set_stream_sid(stream_sid)
-            
             logger.info(f"🚀 Stream started: {stream_sid}")
-            
-            # Update Redis
+
+            # NEW: Ensure frame sender is running before greeting (idempotent)
+            await stream_service.start()
+
             try:
                 redis_service.update_session(call_sid, {"stream_sid": stream_sid})
             except Exception as e:
                 logger.error(f"Redis error: {e}")
             
-            # Send greeting
             greeting_text = f"Thank you for calling {voice_config.CLINIC_NAME}! How can I help you today?"
             logger.info(f"💬 Sending greeting...")
-            
+
+            # NEW: Clear buffer before greeting
+            try:
+                await stream_service.clear()
+            except Exception as e:
+                logger.warning(f"⚠ Clear before greeting failed: {e}")
+
             try:
                 async for audio_b64 in tts_service.generate(greeting_text):
                     if audio_b64:
                         await stream_service.buffer(None, audio_b64)
-                
                 logger.info("✓ Greeting sent")
                 has_sent_greeting = True
             except Exception as e:
                 logger.error(f"✗ Greeting error: {e}")
-                traceback.print_exc()
             
             message_count = 2
         
-        # ========== MAIN MESSAGE LOOP ==========
+        # Main loop
         while True:
             try:
                 message = await websocket.receive_text()
                 message_count += 1
-                
                 data = json.loads(message)
                 event = data.get("event")
                 
@@ -361,12 +354,15 @@ async def websocket_stream(websocket: WebSocket):
                 
                 if event == "connected":
                     logger.debug("📡 Connected event")
-                    
+                
                 elif event == "start":
                     if not has_sent_greeting:
                         stream_sid = data.get("streamSid")
                         stream_service.set_stream_sid(stream_sid)
                         logger.info(f"🚀 Stream started: {stream_sid}")
+
+                        # NEW: Ensure frame sender is running (idempotent)
+                        await stream_service.start()
                         
                         try:
                             redis_service.update_session(call_sid, {"stream_sid": stream_sid})
@@ -375,23 +371,27 @@ async def websocket_stream(websocket: WebSocket):
                         
                         greeting_text = f"Thank you for calling {voice_config.CLINIC_NAME}! How can I help you today?"
                         logger.info("💬 Sending greeting...")
+
+                        # NEW: Clear buffer before greeting
+                        try:
+                            await stream_service.clear()
+                        except Exception as e:
+                            logger.warning(f"⚠ Clear before greeting failed: {e}")
                         
                         try:
                             async for audio_b64 in tts_service.generate(greeting_text):
                                 if audio_b64:
                                     await stream_service.buffer(None, audio_b64)
-                            
                             logger.info("✓ Greeting sent")
                             has_sent_greeting = True
                         except Exception as e:
                             logger.error(f"✗ Greeting error: {e}")
                 
                 elif event == "media":
-                    # ========== FORWARD AUDIO TO DEEPGRAM FOR TRANSCRIPTION ==========
+                    # Forward inbound audio to Deepgram
                     if deepgram_service and deepgram_service.is_ready():
                         payload = data.get("media", {}).get("payload")
                         if payload:
-                            # Send base64 audio to Deepgram
                             deepgram_service.send(payload)
                 
                 elif event == "mark":
@@ -419,9 +419,15 @@ async def websocket_stream(websocket: WebSocket):
         traceback.print_exc()
     
     finally:
-        # Cleanup
         logger.info(f"\n{'=' * 80}")
         logger.info("🧹 Cleaning up...")
+
+        # NEW: Stop background frame sender
+        try:
+            if stream_service:
+                await stream_service.shutdown()
+        except Exception as e:
+            logger.warning(f"⚠ StreamService shutdown error: {e}")
         
         if deepgram_service and deepgram_manager:
             try:
@@ -458,7 +464,6 @@ async def websocket_stream(websocket: WebSocket):
         logger.info(f"✓ Cleanup complete for {call_sid}")
         logger.info("=" * 80)
 
-
 @router.post("/status")
 async def handle_call_status(
     request: Request,
@@ -466,24 +471,16 @@ async def handle_call_status(
     CallStatus: str = Form(...),
     db: Session = Depends(get_db)
 ):
-    """Handle call status updates from Twilio"""
     try:
         logger.info(f"📊 Call status: {CallSid} - {CallStatus}")
-        
-        db_session = db.query(CallSession).filter(
-            CallSession.call_sid == CallSid
-        ).first()
-        
+        db_session = db.query(CallSession).filter(CallSession.call_sid == CallSid).first()
         if db_session:
             db_session.status = CallStatus
             db.commit()
-        
         if CallStatus in ["completed", "failed", "busy", "no-answer"]:
             agent = VoiceAgentService(db)
             await agent.end_call(CallSid)
-        
         return JSONResponse({"success": True})
-        
     except Exception as e:
         logger.error(f"✗ Status error: {e}")
         return JSONResponse({"success": False, "error": str(e)})
