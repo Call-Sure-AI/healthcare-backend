@@ -304,6 +304,23 @@ class VoiceAgentService:
             
             print(f"Arguments: {arguments}")
 
+            # ============ FIX 1: ADD USER CONTEXT BEFORE EXECUTION ============
+            if function_name == "get_available_doctors":
+                # Get conversation history to extract symptoms/context
+                conversation_history = session.get("conversation_history", [])
+                user_context = ""
+                
+                # Get ALL user messages to build context
+                for msg in conversation_history:
+                    if msg.get("role") == "user":
+                        user_context += " " + msg.get("content", "")
+                
+                # Add user_context to arguments BEFORE executing function
+                arguments["user_context"] = user_context.strip()
+                print(f"📋 User context for doctor filtering: '{user_context.strip()}'")
+            # ============ END FIX 1 ============
+
+            # ============ DOCTOR ID RESOLUTION (only for these functions) ============
             if function_name in ["get_available_slots", "book_appointment", "get_doctor_schedule"]:
                 doctor_id = arguments.get("doctor_id", "")
                 
@@ -318,9 +335,9 @@ class VoiceAgentService:
                     # Verify it exists in available doctors
                     valid = any(d["doctor_id"] == doctor_id for d in available_doctors)
                     if valid:
-                        print(f"Valid doctor_id: {doctor_id}")
+                        print(f"✓ Valid doctor_id: {doctor_id}")
                     else:
-                        print(f"doctor_id {doctor_id} not in available doctors, will resolve...")
+                        print(f"⚠ doctor_id {doctor_id} not in available doctors, will resolve...")
                         doctor_id = None
                 
                 # Strategy 2: Resolve from name/index if needed
@@ -329,53 +346,49 @@ class VoiceAgentService:
                     selected_doctor_id = session.get("selected_doctor_id")
                     if selected_doctor_id:
                         arguments["doctor_id"] = selected_doctor_id
-                        print(f"Using pre-selected doctor: {selected_doctor_id}")
+                        print(f"✓ Using pre-selected doctor: {selected_doctor_id}")
                     elif available_doctors:
                         # Try to resolve from available doctors
                         resolved_id = self._resolve_doctor_id(doctor_id, available_doctors)
                         if resolved_id:
                             arguments["doctor_id"] = resolved_id
-                            print(f"Resolved to: {resolved_id}")
+                            print(f"✓ Resolved to: {resolved_id}")
                         else:
-                            print("Could not resolve doctor. Asking for clarification.")
+                            print("❌ Could not resolve doctor. Asking for clarification.")
                             clarification_text = "I'm sorry, I couldn't identify that doctor. Could you please tell me the name of the doctor you'd like to see from the available list?"
                             
                             redis_service.append_to_conversation(call_sid, "assistant", clarification_text)
                             return {
                                 "success": True,
                                 "response": clarification_text,
-                                "function_called": False, # No function was executed
+                                "function_called": False,
                             }
                     else:
-                        print(f"No available doctors in session!")
+                        print(f"⚠ No available doctors in session!")
             
-            # Execute the function
+            # ============ EXECUTE FUNCTION (ONLY ONCE!) ============
+            print(f"🔧 Executing function: {function_name}")
             function_result = self.ai_tools.execute_function(
                 function_name,
                 arguments
             )
             
-            print(f"   Result success: {function_result.get('success', False)}")
+            print(f"   ✓ Result success: {function_result.get('success', False)}")
             
-            # Store doctor list in session after get_available_doctors
-            if function_name == "get_available_doctors":
-                # Get conversation history to extract symptoms/context
-                conversation_history = session.get("conversation_history", [])
-                user_context = ""
-                
-                # Get last 2 user messages
-                for msg in conversation_history[-4:]:
-                    if msg.get("role") == "user":
-                        user_context += " " + msg.get("content", "")
+            # ============ FIX 2: STORE DOCTORS IN SESSION ============
+            if function_name == "get_available_doctors" and function_result.get("success"):
+                doctors = function_result.get("doctors", [])
+                if doctors:
+                    redis_service.update_session(call_sid, {
+                        "available_doctors": doctors
+                    })
+                    print(f"✓ Stored {len(doctors)} doctors in session")
+                    
+                    # Log the doctors for debugging
+                    for doc in doctors:
+                        print(f"   - {doc['name']} ({doc['specialization']})")
+            # ============ END FIX 2 ============
             
-            arguments["user_context"] = user_context.strip()
-            print(f"📋 User context for doctor filtering: '{user_context}'")
-
-            function_result = self.ai_tools.execute_function(
-                function_name,
-                arguments
-            )
-
             # Store selected doctor after successful get_available_slots
             if function_name == "get_available_slots" and function_result.get("success"):
                 doctor_id = arguments.get("doctor_id")
@@ -383,7 +396,7 @@ class VoiceAgentService:
                     redis_service.update_session(call_sid, {
                         "selected_doctor_id": doctor_id
                     })
-                    print(f"Stored selected doctor: {doctor_id}")
+                    print(f"✓ Stored selected doctor: {doctor_id}")
             
             # Generate natural language response
             response_text = self._generate_response_from_function_result(
@@ -403,7 +416,7 @@ class VoiceAgentService:
             }
             
         except Exception as e:
-            print(f"Error handling function call: {e}")
+            print(f"❌ Error handling function call: {e}")
             import traceback
             traceback.print_exc()
             

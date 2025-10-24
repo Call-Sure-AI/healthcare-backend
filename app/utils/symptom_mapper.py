@@ -3,44 +3,44 @@ from typing import List, Optional
 # Comprehensive symptom-to-specialization mapping
 SYMPTOM_SPECIALIZATION_MAP = {
     "Cardiology": [
-        "chest pain", "heart", "cardiac", "blood pressure", "hypertension",
-        "palpitations", "irregular heartbeat", "cholesterol", "heart attack",
-        "angina", "breathlessness", "shortness of breath"
+        "cardio", "cardiologist", "heart", "cardiac", "chest pain", 
+        "blood pressure", "hypertension", "palpitations", 
+        "irregular heartbeat", "cholesterol", "heart attack", 
+        "angina", "breathlessness"
     ],
     "Orthopedics": [
-        "bone", "joint", "fracture", "sprain", "back pain", "knee pain",
-        "arthritis", "shoulder pain", "neck pain", "hip pain", "leg pain",
-        "muscle pain", "sports injury", "ligament", "cartilage"
+        "ortho", "orthopedic", "orthopedist", "bone", "joint", 
+        "fracture", "sprain", "back pain", "knee pain", "arthritis", 
+        "shoulder pain", "neck pain"
     ],
     "Pediatrics": [
-        "child", "baby", "infant", "kid", "vaccination", "fever in child",
-        "newborn", "growth", "development", "pediatric", "children"
+        "pediatric", "pediatrician", "child", "baby", "infant", 
+        "kid", "vaccination", "children"
     ],
     "Dermatology": [
-        "skin", "rash", "acne", "allergy", "eczema", "psoriasis", "moles",
-        "hair loss", "dandruff", "itching", "hives", "pigmentation"
+        "derma", "dermatologist", "dermatology", "skin", "rash", 
+        "acne", "allergy", "eczema", "psoriasis", "hair loss"
     ],
     "Neurology": [
-        "headache", "migraine", "seizure", "epilepsy", "stroke", "paralysis",
-        "numbness", "tingling", "memory loss", "dizziness", "vertigo",
-        "parkinson", "alzheimer", "tremor"
+        "neuro", "neurologist", "neurology", "headache", "migraine", 
+        "seizure", "epilepsy", "stroke", "paralysis", "numbness", 
+        "tingling", "memory loss", "dizziness", "vertigo", "brain"
     ],
     "Gynecology": [
-        "pregnancy", "pregnant", "menstruation", "period", "pcos", "pcod",
-        "gynec", "women's health", "uterus", "ovarian", "menopause",
-        "contraception", "fertility"
+        "gynec", "gynecologist", "gynecology", "pregnancy", "pregnant", 
+        "menstruation", "period", "pcos", "women's health"
     ],
     "Psychiatry": [
-        "depression", "anxiety", "stress", "mental health", "insomnia",
-        "panic attack", "mood", "bipolar", "schizophrenia", "ocd", "ptsd"
+        "psych", "psychiatrist", "psychiatry", "depression", "anxiety", 
+        "stress", "mental health", "insomnia", "panic attack"
     ],
     "General Medicine": [
-        "fever", "cold", "cough", "flu", "diabetes", "thyroid", "general checkup",
-        "health checkup", "fatigue", "weakness", "weight loss", "weight gain"
+        "general", "physician", "doctor", "fever", "cold", "cough", 
+        "flu", "diabetes", "checkup", "fatigue"
     ],
     "Alternative Medicine": [
-        "ayurveda", "homeopathy", "alternative", "natural treatment",
-        "herbal", "holistic", "traditional medicine"
+        "ayurveda", "homeopathy", "alternative", "natural treatment", 
+        "herbal", "holistic", "BAMS", "ayurvedic"
     ]
 }
 
@@ -50,20 +50,30 @@ def extract_specialization_from_text(text: str) -> Optional[str]:
     Analyze user text (symptoms/reason) and return the matching specialization.
     Returns None if no clear match is found.
     """
+    if not text:
+        print(f"⚠️  Empty text provided")
+        return None
+        
     text_lower = text.lower()
+    print(f"🔍 Analyzing text: '{text_lower}'")
     
     # Track matches with scores
     specialization_scores = {}
     
     for specialization, keywords in SYMPTOM_SPECIALIZATION_MAP.items():
         score = 0
+        matched_keywords = []
+        
         for keyword in keywords:
             if keyword in text_lower:
                 # Longer keywords get higher scores (more specific)
-                score += len(keyword.split())
+                keyword_score = len(keyword.split())
+                score += keyword_score
+                matched_keywords.append(keyword)
         
         if score > 0:
             specialization_scores[specialization] = score
+            print(f"   ✓ Matched '{specialization}' (score: {score}, keywords: {matched_keywords})")
     
     # Return specialization with highest score
     if specialization_scores:
@@ -71,6 +81,7 @@ def extract_specialization_from_text(text: str) -> Optional[str]:
         print(f"🎯 Detected specialization: {best_match} (from '{text}')")
         return best_match
     
+    print(f"❌ No specialization detected in: '{text}'")
     return None
 
 
@@ -82,19 +93,29 @@ def filter_doctors_by_specialization(
     Filter doctors list by specialization.
     If no specialization provided or no matches, return top 5 doctors.
     """
-    if not specialization or not doctors:
-        # Return max 5 doctors if no specialization match
+    if not doctors:
+        print(f"⚠️  No doctors provided to filter")
+        return []
+    
+    if not specialization:
+        # Return max 5 doctors if no specialization specified
+        print(f"ℹ️  No specialization specified, returning first 5 doctors")
         return doctors[:5]
     
-    # Filter doctors matching the specialization
+    print(f"🔍 Filtering {len(doctors)} doctors for specialization: '{specialization}'")
+    
+    # Filter doctors matching the specialization (case-insensitive)
     filtered = [
         doc for doc in doctors 
         if doc.get("specialization", "").lower() == specialization.lower()
     ]
     
     if filtered:
-        print(f"Found {len(filtered)} doctors for {specialization}")
+        print(f"✅ Found {len(filtered)} doctor(s) for '{specialization}':")
+        for doc in filtered:
+            print(f"   - {doc['name']} (ID: {doc['doctor_id']})")
         return filtered
     else:
-        print(f"No {specialization} specialists found, returning top 5 general doctors")
+        print(f"⚠️  No '{specialization}' specialists found in database")
+        print(f"   Returning first 5 general doctors as fallback")
         return doctors[:5]
