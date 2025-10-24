@@ -58,8 +58,8 @@ class StreamService:
 
     async def _send_audio(self, audio_b64: str) -> None:
         """
-        Decode and send audio as ~20 ms mu-law frames with heartbeat monitoring.
-        Detects WebSocket disconnection during playback.
+        Decode and send audio as ~20 ms mu-law frames.
+        Optimized for low latency - sends immediately without artificial delays.
         """
         if not self.stream_sid:
             logger.error("StreamService -> Cannot send audio: streamSid not set")
@@ -88,12 +88,13 @@ class StreamService:
             sent = 0
             frames_sent = 0
             
-            # Send frames in real-time order with heartbeat monitoring
+            # ============ CRITICAL FIX: Send frames immediately ============
+            # Twilio handles the pacing internally, we don't need to sleep!
             while sent < total:
-                # Check WebSocket connection every 100 frames (~2 seconds)
+                # Check WebSocket connection periodically
                 if frames_sent % 100 == 0 and frames_sent > 0:
                     if self.ws.client_state != WebSocketState.CONNECTED:
-                        logger.warning(f"⚠️  WebSocket disconnected during playback (after {frames_sent} frames)")
+                        logger.warning(f"⚠️  WebSocket disconnected (after {frames_sent} frames)")
                         break
                 
                 frame = audio_bytes[sent: sent + FRAME_BYTES]
@@ -113,8 +114,9 @@ class StreamService:
                 sent += len(frame)
                 frames_sent += 1
                 
-                # ~20 ms pacing per frame
-                await asyncio.sleep(FRAME_MS / 1000.0)
+                # ============ REMOVED: await asyncio.sleep(FRAME_MS / 1000.0) ============
+                # Twilio buffers and paces audio automatically
+                # Sleeping here adds 20ms delay per frame = massive latency!
             
             elapsed_time = time.time() - start_time
             
@@ -123,7 +125,7 @@ class StreamService:
             logger.info(f"   ✓ Bytes: {sent}/{total}")
             logger.info(f"   ✓ Time: {elapsed_time:.2f}s")
             
-            # Send trailing mark so app knows when Twilio finished playback
+            # Send trailing mark for playback completion tracking
             mark_label = str(uuid.uuid4())
             mark_message = {
                 "event": "mark",
@@ -133,10 +135,12 @@ class StreamService:
             
             await self.ws.send_text(json.dumps(mark_message))
             
-            # Wait for audio to finish playing (add small buffer)
+            # ============ OPTIONAL: Wait for Twilio to finish playing ============
+            # Only wait if you need to prevent user from interrupting
+            # For more responsive agent, comment this out
             remaining_time = audio_duration_sec - elapsed_time
-            if remaining_time > 0:
-                await asyncio.sleep(remaining_time + 0.1)
+            if remaining_time > 0.1:  # Only wait if significant time remaining
+                await asyncio.sleep(remaining_time)
                 logger.info(f"✓ Audio playback complete")
             
         except Exception as e:
@@ -144,4 +148,5 @@ class StreamService:
             import traceback
             traceback.print_exc()
             raise
+
 
