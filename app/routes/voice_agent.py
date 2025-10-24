@@ -359,12 +359,25 @@ async def websocket_stream(websocket: WebSocket):
             logger.info(f"💬 Sending greeting...")
             
             try:
+                greeting_chunks = []
                 async for audio_b64 in tts_service.generate(greeting_text):
                     if audio_b64:
-                        await stream_service.buffer(None, audio_b64)
-                
-                logger.info("✓ Greeting sent")
-                has_sent_greeting = True
+                        greeting_chunks.append(audio_b64)
+
+                if greeting_chunks:
+                    # Combine all chunks into one
+                    combined_greeting = b''.join([base64.b64decode(c) for c in greeting_chunks])
+                    final_greeting_b64 = base64.b64encode(combined_greeting).decode('ascii')
+                                
+                    # Send as single chunk
+                    await stream_service._send_audio(final_greeting_b64)
+
+                    logger.info("✓ Greeting sent")
+                    has_sent_greeting = True
+
+                else:
+                    logger.error("❌ No greeting audio generated")
+
             except Exception as e:
                 logger.error(f"✗ Greeting error: {e}")
                 traceback.print_exc()
@@ -401,14 +414,25 @@ async def websocket_stream(websocket: WebSocket):
                         logger.info("💬 Sending greeting...")
                         
                         try:
+                            greeting_chunks = []
                             async for audio_b64 in tts_service.generate(greeting_text):
                                 if audio_b64:
-                                    await stream_service.buffer(None, audio_b64)
-                            
+                                    greeting_chunks.append(audio_b64)
+
+                            if greeting_chunks:
+                                # Combine all chunks into one
+                                combined_greeting = b''.join([base64.b64decode(c) for c in greeting_chunks])
+                                final_greeting_b64 = base64.b64encode(combined_greeting).decode('ascii')
+                                
+                                # Send as single chunk
+                                await stream_service._send_audio(final_greeting_b64)
+
                             logger.info("✓ Greeting sent")
                             has_sent_greeting = True
                         except Exception as e:
                             logger.error(f"✗ Greeting error: {e}")
+                            import traceback
+                            traceback.print_exc()
                 
                 elif event == "media":
                     # ========== FORWARD AUDIO TO DEEPGRAM FOR TRANSCRIPTION ==========
