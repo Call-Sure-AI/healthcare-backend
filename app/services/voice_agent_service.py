@@ -86,6 +86,8 @@ class VoiceAgentService:
             # ============ AUTO-DETECT DOCTOR FROM PREVIOUS CONTEXT ============
             user_lower = user_text.lower()
             available_doctors = session.get("available_doctors", [])
+            
+            doctor_detected = False  # ← Track if we detected a doctor
 
             if available_doctors:
                 for doctor in available_doctors:
@@ -98,8 +100,17 @@ class VoiceAgentService:
                                 "selected_doctor_id": doctor["doctor_id"],
                                 "selected_doctor_name": doctor["name"]
                             })
-                            logger.info(f"✓ Auto-detected doctor: {doctor['name']} ({doctor['doctor_id']})")
+                            logger.info(f"Auto detected doctor: {doctor['name']} ({doctor['doctor_id']})")
+                            doctor_detected = True
                             break
+                    
+                    if doctor_detected:
+                        break
+            
+            # ============ CRITICAL: Refresh session if doctor was detected ============
+            if doctor_detected:
+                session = redis_service.get_session(call_sid)
+                logger.info(f"✓ Refreshed session after auto-detection")
 
             # ============ GET CONVERSATION HISTORY AND CALL OPENAI ============
             conversation_history = session.get("conversation_history", [])
@@ -115,6 +126,10 @@ class VoiceAgentService:
             # ============ HANDLE FUNCTION CALLS ============
             if result.get("function_call"):
                 logger.info(f"🔧 Function call detected: {result.get('function_call', {}).get('name')}")
+                
+                # ============ CRITICAL: Get fresh session before function call ============
+                session = redis_service.get_session(call_sid)
+                
                 function_result = await self._handle_function_call(call_sid, result, session)
                 
                 duration = time.time() - start_time
@@ -151,6 +166,7 @@ class VoiceAgentService:
                 "error": str(e),
                 "response": "I apologize, but I'm having trouble processing that. Could you please try again?"
             }
+
     
     def _resolve_doctor_id(self, input_id: str, available_doctors: List[Dict]) -> str:
         """
