@@ -310,7 +310,6 @@ class VoiceAgentService:
                 
                 # Format date nicely
                 try:
-                    from datetime import datetime
                     date_obj = datetime.strptime(date, "%Y-%m-%d")
                     formatted_date = date_obj.strftime("%B %d, %Y")  # "October 29, 2025"
                 except:
