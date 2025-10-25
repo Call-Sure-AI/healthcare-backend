@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Dict, Any, List
 from sqlalchemy.orm import Session
 from app.services.doctor_service import DoctorService
@@ -6,6 +6,7 @@ from app.services.appointment_service import AppointmentService
 from app.models.leave import DoctorLeave
 from app.utils.symptom_mapper import extract_specialization_from_text, filter_doctors_by_specialization
 from app.schemas.appointment import AppointmentCreate
+import re
 
 AI_FUNCTIONS = [
     {
@@ -245,8 +246,6 @@ class AIToolsExecutor:
 
     def _parse_date(self, date_str: str) -> str:
         """Parse various date formats to YYYY-MM-DD"""
-        import re
-        from datetime import datetime, timedelta
         
         date_str = date_str.lower().strip()
         today = datetime.now().date()
@@ -280,7 +279,26 @@ class AIToolsExecutor:
         
         # Extract numbers
         numbers = re.findall(r'\d+', date_str)
-        
+
+        if month_num and len(numbers) == 1:
+            # Format: "27th October" or "October 27"
+            day = int(numbers[0])
+            year = today.year
+            
+            # Smart year handling: if date is in the past, use next year
+            try:
+                parsed_date = datetime(year, month_num, day).date()
+                if parsed_date < today:
+                    year += 1
+                    print(f"Date {day}/{month_num} is in past, using next year: {year}")
+            except ValueError:
+                # Invalid date (e.g., Feb 30)
+                print(f"Invalid date {day}/{month_num}, keeping year {year}")
+            
+            result = f"{year:04d}-{month_num:02d}-{day:02d}"
+            print(f"   → Parsed as: {result}")
+            return result
+
         if month_num and len(numbers) >= 2:
             # Format: "20th October 2025" or "October 20, 2025"
             day = int(numbers[0])

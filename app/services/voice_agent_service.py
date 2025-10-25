@@ -223,20 +223,40 @@ class VoiceAgentService:
                 prefix = ""
                 if specialization:
                     prefix = f"Based on your symptoms, I found {len(doctors)} {specialization} specialist{'s' if len(doctors) > 1 else ''}. "
-                
+                    
                 # Format doctor list (max 5)
                 if len(doctors) == 1:
                     doc = doctors[0]
-                    return f"{prefix}We have {doc['name']} available. Would you like to book an appointment?"
+                    degree = doc.get("degree", "")
+                    spec = doc.get("specialization", "General Medicine")
+                
+                    return f"{prefix}We have {doc['name']}, {degree}, specializing in {spec}. Would you like to book an appointment?"
+            
                 
                 elif len(doctors) == 2:
-                    return f"{prefix}We have {doctors[0]['name']} and {doctors[1]['name']} available. Which doctor would you prefer?"
+                    desc1 = f"{doc1['name']}, {doc1.get('degree', '')}, {doc1.get('specialization', 'General Medicine')}"
+                    desc2 = f"{doc2['name']}, {doc2.get('degree', '')}, {doc2.get('specialization', 'General Medicine')}"
+                
+                    return f"{prefix}We have {desc1} and {desc2} available. Which doctor would you prefer?"
+            
                 
                 elif len(doctors) <= 5:
-                    doctor_names = ", ".join([doc['name'] for doc in doctors[:-1]])
-                    last_doctor = doctors[-1]['name']
-                    return f"{prefix}We have {doctor_names}, and {last_doctor} available. Which doctor would you like to see?"
-                
+                    doctor_descriptions = []
+                    for doc in doctors[:-1]:
+                        degree = doc.get("degree", "")
+                        spec = doc.get("specialization", "General Medicine")
+                        doctor_descriptions.append(f"{doc['name']}, {degree}, specializing in {spec}")
+                    
+                    # Last doctor
+                    last_doc = doctors[-1]
+                    last_degree = last_doc.get("degree", "")
+                    last_spec = last_doc.get("specialization", "General Medicine")
+                    last_desc = f"{last_doc['name']}, {last_degree}, specializing in {last_spec}"
+                    
+                    doctors_text = ", ".join(doctor_descriptions) + f", and {last_desc}"
+                    
+                    return f"{prefix}We have {doctors_text} available. Which doctor would you like to see?"
+                            
                 else:
                     # Should not happen due to filtering, but just in case
                     return f"{prefix}We have {len(doctors)} doctors available. Could you tell me which doctor you'd prefer?"
