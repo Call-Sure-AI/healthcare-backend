@@ -8,6 +8,9 @@ from app.utils.symptom_mapper import extract_specialization_from_text, filter_do
 from app.schemas.appointment import AppointmentCreate
 import re
 from fastapi import HTTPException
+from collections import Counter
+import traceback
+import re
 
 AI_FUNCTIONS = [
     {
@@ -126,29 +129,23 @@ class AIToolsExecutor:
                 return {"success": False, "error": f"Unknown function: {function_name}"}
         except Exception as e:
             print(f"Function execution error: {e}")
-            import traceback
             traceback.print_exc()
             return {"success": False, "error": str(e)}
     
     def get_available_doctors(self, user_context: str) -> Dict[str, Any]:
         """Get list of active doctors who are not on leave, filtered by symptoms/specialization"""
-        try:
-            from app.utils.symptom_mapper import extract_specialization_from_text, filter_doctors_by_specialization
-            from collections import Counter
-            
+        try:            
             print(f"\n{'='*80}")
-            print(f"🔍 get_available_doctors called")
-            print(f"   User context: '{user_context}'")
-            print(f"   Context length: {len(user_context)} chars")
+            print(f"get_available_doctors called")
+            print(f"User context: '{user_context}'")
+            print(f"Context length: {len(user_context)} chars")
             print(f"{'='*80}\n")
             
             print("Fetching available doctors...")
-            
-            # ========== STEP 1: GET ALL ACTIVE DOCTORS ==========
+
             doctors = DoctorService.get_all_active_doctors(self.db)
-            print(f"   Total ACTIVE doctors in DB: {len(doctors)}")
-            
-            # ========== STEP 2: GET DOCTORS ON LEAVE ==========
+            print(f"Total ACTIVE doctors in DB: {len(doctors)}")
+
             today = date.today()
             doctors_on_leave = self.db.query(DoctorLeave.doctor_id).filter(
                 DoctorLeave.start_date <= today,
@@ -156,9 +153,8 @@ class AIToolsExecutor:
             ).all()
             
             on_leave_ids = [leave.doctor_id for leave in doctors_on_leave]
-            print(f"   Doctors on leave: {len(on_leave_ids)}")
-            
-            # ========== STEP 3: BUILD LIST OF AVAILABLE DOCTORS ==========
+            print(f"Doctors on leave: {len(on_leave_ids)}")
+
             active_doctors = []
             for doc in doctors:
                 is_on_leave = doc.doctor_id in on_leave_ids
@@ -170,36 +166,32 @@ class AIToolsExecutor:
                         "specialization": doc.specialization or "General Medicine"
                     })
             
-            print(f"   Available doctors before filtering: {len(active_doctors)}")
-            
-            # ========== STEP 4: SHOW SPECIALIZATION DISTRIBUTION ==========
+            print(f"Available doctors before filtering: {len(active_doctors)}")
+
             if active_doctors:
                 spec_dist = Counter(d["specialization"] for d in active_doctors)
-                print(f"   📋 Specialization distribution:")
+                print(f"Specialization distribution:")
                 for spec, count in spec_dist.most_common():
                     print(f"      - {spec}: {count}")
-            
-            # ========== STEP 5: DETECT SPECIALIZATION FROM USER CONTEXT ==========
+
             detected_specialization = None
             if user_context:
-                print(f"\n🔍 Detecting specialization from: '{user_context}'")
+                print(f"\nDetecting specialization from: '{user_context}'")
                 detected_specialization = extract_specialization_from_text(user_context)
-                print(f"🎯 Detected: {detected_specialization or 'None'}")
+                print(f"Detected: {detected_specialization or 'None'}")
             else:
-                print(f"⚠️  No user context provided - cannot detect specialization")
-            
-            # ========== STEP 6: FILTER DOCTORS BY SPECIALIZATION ==========
+                print(f"No user context provided - cannot detect specialization")
+
             filtered_doctors = filter_doctors_by_specialization(
                 active_doctors,
                 detected_specialization
             )
             
-            print(f"\n   🎯 Final result: {len(filtered_doctors)} doctors")
+            print(f"\nFinal result: {len(filtered_doctors)} doctors")
             for doc in filtered_doctors:
                 print(f"      - {doc['name']} ({doc['specialization']})")
             print(f"\n{'='*80}\n")
-            
-            # ========== STEP 7: RETURN RESULT ==========
+
             if not filtered_doctors:
                 return {
                     "success": False,
@@ -208,7 +200,7 @@ class AIToolsExecutor:
                     "specialization_detected": detected_specialization
                 }
             
-            print(f"   Result success: True")
+            print(f"Result success: True")
             
             return {
                 "success": True,
@@ -218,7 +210,7 @@ class AIToolsExecutor:
             }
             
         except Exception as e:
-            print(f"❌ Error in get_available_doctors: {e}")
+            print(f"Error in get_available_doctors: {e}")
             import traceback
             traceback.print_exc()
             return {"success": False, "error": str(e), "doctors": []}
@@ -250,50 +242,42 @@ class AIToolsExecutor:
         
         date_str = date_str.lower().strip()
         today = datetime.now().date()
-        
-        # Handle relative dates
+
         if "tomorrow" in date_str:
             target_date = today + timedelta(days=1)
             return target_date.strftime("%Y-%m-%d")
         
         if "today" in date_str:
             return today.strftime("%Y-%m-%d")
-        
-        # Check if already in YYYY-MM-DD format
+
         if re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
             return date_str
-        
-        # Month name mapping
+
         months = {
             'january': 1, 'jan': 1, 'february': 2, 'feb': 2, 'march': 3, 'mar': 3,
             'april': 4, 'apr': 4, 'may': 5, 'june': 6, 'jun': 6,
             'july': 7, 'jul': 7, 'august': 8, 'aug': 8, 'september': 9, 'sep': 9,
             'october': 10, 'oct': 10, 'november': 11, 'nov': 11, 'december': 12, 'dec': 12
         }
-        
-        # Extract month name if present
+
         month_num = None
         for month_name, num in months.items():
             if month_name in date_str:
                 month_num = num
                 break
-        
-        # Extract numbers
+
         numbers = re.findall(r'\d+', date_str)
 
         if month_num and len(numbers) == 1:
-            # Format: "27th October" or "October 27"
             day = int(numbers[0])
             year = today.year
-            
-            # Smart year handling: if date is in the past, use next year
+
             try:
                 parsed_date = datetime(year, month_num, day).date()
                 if parsed_date < today:
                     year += 1
                     print(f"Date {day}/{month_num} is in past, using next year: {year}")
             except ValueError:
-                # Invalid date (e.g., Feb 30)
                 print(f"Invalid date {day}/{month_num}, keeping year {year}")
             
             result = f"{year:04d}-{month_num:02d}-{day:02d}"
@@ -321,7 +305,7 @@ class AIToolsExecutor:
             year = today.year
             return f"{year:04d}-{month:02d}-{day:02d}"
         
-        # Fallback: return as-is
+        # Fallback
         return date_str
 
     def _find_doctor_id_by_name(self, doctor_name: str) -> str:
@@ -330,22 +314,19 @@ class AIToolsExecutor:
             doctors = DoctorService.get_all_doctors(self.db)
             
             doctor_name_lower = doctor_name.lower().strip()
-            
-            # Remove common prefixes
+
             doctor_name_clean = doctor_name_lower.replace('dr.', '').replace('dr', '').replace('doctor', '').strip()
             
-            print(f"🔍 Looking for doctor: '{doctor_name}' (cleaned: '{doctor_name_clean}')")
-            
-            # Try exact match first
+            print(f"Looking for doctor: '{doctor_name}' (cleaned: '{doctor_name_clean}')")
+
             for doc in doctors:
                 if doc.name.lower().strip() == doctor_name_clean:
-                    print(f"   ✅ Exact match: {doc.name} ({doc.doctor_id})")
+                    print(f"Exact match: {doc.name} ({doc.doctor_id})")
                     return doc.doctor_id
-            
-            # Try partial match
+
             for doc in doctors:
                 if doctor_name_clean in doc.name.lower() or doc.name.lower() in doctor_name_clean:
-                    print(f"   ✅ Partial match: {doc.name} ({doc.doctor_id})")
+                    print(f"Partial match: {doc.name} ({doc.doctor_id})")
                     return doc.doctor_id
             
             # No match found
@@ -357,7 +338,6 @@ class AIToolsExecutor:
             return None
 
 
-    # Update get_available_slots to use the parser
     def get_available_slots(self, doctor_id: str, date: str) -> Dict[str, Any]:
         """Get available time slots for a doctor on a date"""
         try:
@@ -481,12 +461,11 @@ class AIToolsExecutor:
         """Book an appointment"""
         try:
             
-            print(f"📝 Booking appointment for {patient_name}")
+            print(f"Booking appointment for {patient_name}")
             
-            # Parse date if needed
+            # Parse date
             formatted_date = self._parse_date(appointment_date)
-            
-            # Create Pydantic model (not a dict!)
+
             appointment_data = AppointmentCreate(
                 patient_name=patient_name.strip(),
                 patient_phone=patient_phone.strip(),
@@ -497,8 +476,7 @@ class AIToolsExecutor:
                 notes=reason or "Booked via voice call",
                 status="SCHEDULED"
             )
-            
-            # Now pass the Pydantic object
+
             appointment = AppointmentService.create_appointment(
                 self.db,
                 appointment_data
@@ -547,16 +525,14 @@ class AIToolsExecutor:
             from fastapi import HTTPException
             
             print(f"\n{'='*80}")
-            print(f"📅 Booking appointment in hour range")
-            print(f"   Patient: {patient_name}")
-            print(f"   Phone: {patient_phone}")
-            print(f"   Doctor: {doctor_id}")
-            print(f"   Date: {appointment_date}")
-            print(f"   Time range: {time_range}")
+            print(f"Booking appointment in hour range")
+            print(f"Patient: {patient_name}")
+            print(f"Phone: {patient_phone}")
+            print(f"Doctor: {doctor_id}")
+            print(f"Date: {appointment_date}")
+            print(f"Time range: {time_range}")
             print(f"{'='*80}\n")
             
-            # Parse hour from time_range
-            import re
             numbers = re.findall(r'\d+', time_range)
             
             if not numbers:
@@ -618,7 +594,7 @@ class AIToolsExecutor:
                         # Get doctor details
                         doctor = DoctorService.get_doctor_by_id(self.db, doctor_id)
                         
-                        print(f"✅ Booked successfully at {slot_to_try}!")
+                        print(f"Booked successfully at {slot_to_try}!")
                         print(f"{'='*80}\n")
                         
                         return {
@@ -647,7 +623,7 @@ class AIToolsExecutor:
                     continue
             
             # All slots failed
-            print(f"❌ No slots could be booked")
+            print(f"No slots could be booked")
             print(f"{'='*80}\n")
             
             return {
@@ -656,7 +632,7 @@ class AIToolsExecutor:
             }
             
         except Exception as e:
-            print(f"❌ Major error: {e}")
+            print(f"Major error: {e}")
             import traceback
             traceback.print_exc()
             self.db.rollback()

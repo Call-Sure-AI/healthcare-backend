@@ -7,18 +7,14 @@ from app.config.voice_config import voice_config
 
 
 class RedisService:
-    """Service for managing call sessions in Redis"""
-    
     def __init__(self):
         self.redis_client: redis.Redis = get_redis_client()
         self.default_ttl = voice_config.CALL_SESSION_TTL
     
     def _get_key(self, call_sid: str) -> str:
-        """Generate Redis key for call session"""
         return f"call_session:{call_sid}"
     
     def create_session(self, call_sid: str, session_data: Dict[str, Any]) -> bool:
-        """Create a new call session in Redis"""
         try:
             key = self._get_key(call_sid)
             session_data['created_at'] = datetime.now().isoformat()
@@ -36,7 +32,6 @@ class RedisService:
             return False
     
     def get_session(self, call_sid: str) -> Optional[Dict[str, Any]]:
-        """Get call session data from Redis"""
         try:
             key = self._get_key(call_sid)
             data = self.redis_client.get(key)
@@ -49,7 +44,6 @@ class RedisService:
             return None
     
     def update_session(self, call_sid: str, updates: Dict[str, Any]) -> bool:
-        """Update call session data"""
         try:
             session = self.get_session(call_sid)
             if not session:
@@ -72,7 +66,6 @@ class RedisService:
             return False
     
     def append_to_conversation(self, call_sid: str, role: str, content: str) -> bool:
-        """Add message to conversation history"""
         try:
             session = self.get_session(call_sid)
             if not session:
@@ -97,7 +90,6 @@ class RedisService:
             return False
     
     def delete_session(self, call_sid: str) -> bool:
-        """Delete call session from Redis"""
         try:
             key = self._get_key(call_sid)
             self.redis_client.delete(key)
@@ -108,7 +100,6 @@ class RedisService:
             return False
     
     def extend_session_ttl(self, call_sid: str, extra_seconds: int = 300) -> bool:
-        """Extend session TTL by specified seconds"""
         try:
             key = self._get_key(call_sid)
             current_ttl = self.redis_client.ttl(key)
@@ -123,7 +114,6 @@ class RedisService:
             return False
     
     def get_all_active_sessions(self) -> list[Dict[str, Any]]:
-        """Get all active call sessions"""
         try:
             pattern = "call_session:*"
             keys = self.redis_client.keys(pattern)
@@ -140,7 +130,6 @@ class RedisService:
             return []
     
     def set_temp_data(self, call_sid: str, key: str, value: Any, ttl: int = 300) -> bool:
-        """Store temporary data with custom TTL"""
         try:
             redis_key = f"temp:{call_sid}:{key}"
             self.redis_client.setex(redis_key, ttl, json.dumps(value))
@@ -150,7 +139,6 @@ class RedisService:
             return False
     
     def get_temp_data(self, call_sid: str, key: str) -> Optional[Any]:
-        """Get temporary data"""
         try:
             redis_key = f"temp:{call_sid}:{key}"
             data = self.redis_client.get(redis_key)
@@ -160,5 +148,5 @@ class RedisService:
             return None
 
 
-# Global instance
+# Redis Global instance
 redis_service = RedisService()

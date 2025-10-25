@@ -50,13 +50,13 @@ class RedisConfig:
         try:
             client = self.get_client()
             client.ping()
-            print("✅ Redis connection successful")
+            print("Redis connection successful")
             return True
         except redis.ConnectionError as e:
-            print(f"❌ Redis connection failed: {e}")
+            print(f"Redis connection failed: {e}")
             return False
         except Exception as e:
-            print(f"❌ Unexpected Redis error: {e}")
+            print(f"Unexpected Redis error: {e}")
             return False
     
     def close(self):
@@ -69,7 +69,7 @@ class RedisConfig:
             self._connection_pool = None
 
 
-# Global Redis configuration instance
+# Redis instance
 redis_config = RedisConfig()
 
 

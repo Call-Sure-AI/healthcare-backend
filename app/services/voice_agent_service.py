@@ -12,18 +12,16 @@ from app.config.voice_config import voice_config
 from collections import defaultdict
 import logging
 from datetime import datetime
+import traceback
 
 logger = logging.getLogger(__name__)
 
 class VoiceAgentService:
-    """Main service for handling voice agent conversations"""
-    
     def __init__(self, db: Session):
         self.db = db
         self.ai_tools = AIToolsExecutor(db)
     
     async def initiate_call(self, call_sid: str, from_number: str, to_number: str) -> Dict[str, Any]:
-        """Initialize a new call session"""
         try:
             session_data = {
                 "call_sid": call_sid,
@@ -61,33 +59,29 @@ class VoiceAgentService:
             
     
     async def process_user_speech(self, call_sid: str, user_text: str) -> Dict[str, Any]:
-        """Process user speech and generate AI response"""
         try:
             import time
             logger.info(f"\n{'='*80}")
-            logger.info(f"💬 Processing speech: '{user_text}'")
-            logger.info(f"   Call SID: {call_sid}")
+            logger.info(f"Processing speech: '{user_text}'")
+            logger.info(f"Call SID: {call_sid}")
             start_time = time.time()
 
-            # ============ CRITICAL: Add user message to history FIRST ============
             redis_service.append_to_conversation(call_sid, "user", user_text)
-            logger.info(f"✓ Added user message to conversation history")
-            
-            # Get updated session (now includes the user message)
+            logger.info(f"Added user message to conversation history")
+
             session = redis_service.get_session(call_sid)
             if not session:
-                logger.error(f"❌ No session found for {call_sid}")
+                logger.error(f"No session found for {call_sid}")
                 return {
                     "success": False,
                     "error": "Session not found",
                     "response": "I'm sorry, I lost track of our conversation. Could you start again?"
                 }
 
-            # ============ AUTO-DETECT DOCTOR FROM PREVIOUS CONTEXT ============
             user_lower = user_text.lower()
             available_doctors = session.get("available_doctors", [])
             
-            doctor_detected = False  # ← Track if we detected a doctor
+            doctor_detected = False
 
             if available_doctors:
                 for doctor in available_doctors:
@@ -106,15 +100,13 @@ class VoiceAgentService:
                     
                     if doctor_detected:
                         break
-            
-            # ============ CRITICAL: Refresh session if doctor was detected ============
+
             if doctor_detected:
                 session = redis_service.get_session(call_sid)
-                logger.info(f"✓ Refreshed session after auto-detection")
+                logger.info(f"Refreshed session after auto-detection")
 
-            # ============ GET CONVERSATION HISTORY AND CALL OPENAI ============
             conversation_history = session.get("conversation_history", [])
-            logger.info(f"📋 Conversation history: {len(conversation_history)} messages")
+            logger.info(f"Conversation history: {len(conversation_history)} messages")
             
             ai_functions = get_ai_functions()
             result = await openai_service.process_user_input(
@@ -123,30 +115,26 @@ class VoiceAgentService:
                 available_functions=ai_functions,
             )
 
-            # ============ HANDLE FUNCTION CALLS ============
             if result.get("function_call"):
-                logger.info(f"🔧 Function call detected: {result.get('function_call', {}).get('name')}")
-                
-                # ============ CRITICAL: Get fresh session before function call ============
+                logger.info(f"Function call detected: {result.get('function_call', {}).get('name')}")
+
                 session = redis_service.get_session(call_sid)
                 
                 function_result = await self._handle_function_call(call_sid, result, session)
                 
                 duration = time.time() - start_time
-                logger.info(f"✓ Function call processing complete ({duration:.2f}s)")
+                logger.info(f"Function call processing complete ({duration:.2f}s)")
                 logger.info(f"{'='*80}\n")
                 
                 return function_result
 
-            # ============ HANDLE REGULAR RESPONSE ============
             response_text = result.get("response", "I'm sorry, could you please repeat that?")
-            logger.info(f"💬 AI Response: '{response_text[:100]}...'")
+            logger.info(f"AI Response: '{response_text[:100]}...'")
 
-            # Add assistant response to conversation
             redis_service.append_to_conversation(call_sid, "assistant", response_text)
 
             duration = time.time() - start_time
-            logger.info(f"✓ Speech processing complete ({duration:.2f}s)")
+            logger.info(f"Speech processing complete ({duration:.2f}s)")
             logger.info(f"{'='*80}\n")
 
             return {
@@ -156,9 +144,8 @@ class VoiceAgentService:
             }
             
         except Exception as e:
-            logger.error(f"❌ Error processing speech: {e}")
-            logger.error(f"   User text was: '{user_text}'")
-            import traceback
+            logger.error(f"Error processing speech: {e}")
+            logger.error(f"User text was: '{user_text}'")
             traceback.print_exc()
             
             return {
@@ -169,48 +156,37 @@ class VoiceAgentService:
 
     
     def _resolve_doctor_id(self, input_id: str, available_doctors: List[Dict]) -> str:
-        """
-        Resolve doctor ID from various inputs:
-        - Number like "1" -> first doctor
-        - Name like "Amit Kumar" -> match doctor name
-        - Partial name -> fuzzy match
-        """
         try:
             if not input_id or not available_doctors:
                 return None
                 
             input_str = str(input_id).lower().strip()
-            
-            # Try to parse as index (1, 2, 3...)
+
             try:
                 index = int(input_str) - 1
                 if 0 <= index < len(available_doctors):
                     return available_doctors[index]["doctor_id"]
             except ValueError:
                 pass
-            
-            # Remove common prefixes
+
             input_clean = input_str.replace('dr.', '').replace('dr', '').replace('doctor', '').strip()
-            
-            # Try exact name match first
+
             for doctor in available_doctors:
                 doctor_name_lower = doctor["name"].lower()
                 if doctor_name_lower == input_clean or doctor_name_lower.replace('dr.', '').replace('dr', '').strip() == input_clean:
                     print(f"   🎯 Exact name match: {doctor['name']}")
                     return doctor["doctor_id"]
-            
-            # Try partial name match (any word matches)
+
             for doctor in available_doctors:
                 doctor_name_lower = doctor["name"].lower()
                 doctor_name_parts = doctor_name_lower.replace('dr.', '').replace('dr', '').split()
                 input_parts = input_clean.split()
-                
-                # Check if any significant word matches
+
                 for input_part in input_parts:
-                    if len(input_part) > 2:  # Ignore short words like "dr"
+                    if len(input_part) > 2:
                         for name_part in doctor_name_parts:
                             if input_part in name_part or name_part in input_part:
-                                print(f"   🎯 Partial match: {doctor['name']} (matched '{input_part}')")
+                                print(f"Partial match: {doctor['name']} (matched '{input_part}')")
                                 return doctor["doctor_id"]
             
             print(f"No match found for '{input_id}'")
@@ -226,7 +202,6 @@ class VoiceAgentService:
         function_name: str,
         result: Dict[str, Any]
     ) -> str:
-        """Generate natural language response from function result"""
         
         if function_name == "get_available_doctors":
             if result.get("success"):
@@ -235,13 +210,11 @@ class VoiceAgentService:
                 
                 if not doctors:
                     return "I'm sorry, no doctors are currently available. Would you like me to help you with something else?"
-                
-                # Build response based on specialization detection
+
                 prefix = ""
                 if specialization:
                     prefix = f"Based on your symptoms, I found {len(doctors)} {specialization} specialist{'s' if len(doctors) > 1 else ''}. "
-                    
-                # Format doctor list (max 5)
+
                 if len(doctors) == 1:
                     doc = doctors[0]
                     degree = doc.get("degree", "")
@@ -263,8 +236,7 @@ class VoiceAgentService:
                         degree = doc.get("degree", "")
                         spec = doc.get("specialization", "General Medicine")
                         doctor_descriptions.append(f"{doc['name']}, {degree}, specializing in {spec}")
-                    
-                    # Last doctor
+
                     last_doc = doctors[-1]
                     last_degree = last_doc.get("degree", "")
                     last_spec = last_doc.get("specialization", "General Medicine")
@@ -275,7 +247,6 @@ class VoiceAgentService:
                     return f"{prefix}We have {doctors_text} available. Which doctor would you like to see?"
                             
                 else:
-                    # Should not happen due to filtering, but just in case
                     return f"{prefix}We have {len(doctors)} doctors available. Could you tell me which doctor you'd prefer?"
             else:
                 return "I'm having trouble fetching the doctor list at the moment. Could you try again?"
@@ -285,18 +256,16 @@ class VoiceAgentService:
                 slots = result.get("slots", [])
                 if not slots:
                     return f"I'm sorry, there are no available slots on that date. Would you like to try a different date?"
-                
-                # Format slot list
+
                 hourly_slots = self._group_slots_by_hour(slots)
                 if not hourly_slots:
                      return "I couldn't find any specific time slots. Would you like to pick another date?"
 
                 hour_ranges = []
                 for hour, hour_slots in hourly_slots.items():
-                    # Format hour for am/pm
                     period = "AM" if hour < 12 else "PM"
                     display_hour = hour if hour <= 12 else hour - 12
-                    display_hour = 12 if display_hour == 0 else display_hour # Handle midnight/noon
+                    display_hour = 12 if display_hour == 0 else display_hour
                     
                     next_hour = display_hour + 1
                     next_period = period
@@ -323,18 +292,16 @@ class VoiceAgentService:
                 date = appointment.get("appointment_date", "")
                 time = appointment.get("appointment_time", "")
                 confirmation = appointment.get("confirmation_number", "")
-                
-                # Format date nicely
+
                 try:
                     date_obj = datetime.strptime(date, "%Y-%m-%d")
-                    formatted_date = date_obj.strftime("%B %d, %Y")  # "October 29, 2025"
+                    formatted_date = date_obj.strftime("%B %d, %Y")
                 except:
                     formatted_date = date
                 
                 return f"Perfect! Your appointment with {doctor_name} is confirmed for {formatted_date} at {time}. Your confirmation number is {confirmation}. You'll receive an SMS confirmation shortly. Is there anything else I can help you with?"
             
             else:
-                # Parse the error and provide helpful response
                 error_msg = result.get("error", "")
                 
                 if "no available slot" in error_msg.lower() or "no slots" in error_msg.lower():
@@ -353,8 +320,7 @@ class VoiceAgentService:
                 dates = result.get("available_dates", [])
                 if not dates:
                     return "I'm sorry, but that doctor does not seem to have any upcoming availability."
-                
-                # Format date list nicely
+
                 formatted_dates = [datetime.strptime(d, "%Y-%m-%d").strftime("%B %dth") for d in dates]
 
                 if len(formatted_dates) == 1:
@@ -385,14 +351,12 @@ class VoiceAgentService:
         result: Dict[str, Any],
         session: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Handle function call from GPT-4"""
         try:
             function_call = result.get("function_call", {})
             function_name = function_call.get("name")
             
             print(f"Function called: {function_name}")
-            
-            # Get arguments - handle both string and dict formats
+
             arguments = function_call.get("arguments", {})
             if isinstance(arguments, str):
                 import json
@@ -400,64 +364,52 @@ class VoiceAgentService:
             
             print(f"Arguments: {arguments}")
 
-            # ============ FIX 1: ADD USER CONTEXT BEFORE EXECUTION ============
             if function_name == "get_available_doctors":
-                # Get conversation history to extract symptoms/context
                 conversation_history = session.get("conversation_history", [])
-                
-                # Build context from ALL user messages in this conversation
+
                 user_messages = []
                 for msg in conversation_history:
                     if msg.get("role") == "user":
                         user_messages.append(msg.get("content", ""))
-                
-                # Combine all user messages
+
                 user_context = " ".join(user_messages).strip()
-                
-                # OVERRIDE whatever OpenAI sent - use our extracted context
+
                 arguments["user_context"] = user_context
                 
-                print(f"📋 User context for doctor filtering: '{user_context}'")
-                print(f"   (Extracted from {len(user_messages)} user messages)")
+                print(f"User context for doctor filtering: '{user_context}'")
+                print(f"(Extracted from {len(user_messages)} user messages)")
 
             if function_name in ["get_available_slots", "book_appointment_in_hour_range", "get_doctor_schedule"]:
                 doctor_id = arguments.get("doctor_id", "")
-                
-                # Get available doctors and pre-selected doctor from session
+
                 available_doctors = session.get("available_doctors", [])
-                pre_selected_doctor = session.get("selected_doctor_id")  # ← From auto-detection!
+                pre_selected_doctor = session.get("selected_doctor_id")
                 
                 print(f"Resolving doctor_id: '{doctor_id}'")
                 print(f"Available doctors in session: {len(available_doctors)}")
                 if pre_selected_doctor:
-                    print(f"✓ Pre-selected doctor from auto-detection: {pre_selected_doctor}")
-                
-                # ============ CRITICAL: Check pre-selected doctor FIRST ============
+                    print(f"Pre-selected doctor from auto-detection: {pre_selected_doctor}")
+
                 if pre_selected_doctor:
-                    # Auto-detection already found the doctor - use it immediately!
                     arguments["doctor_id"] = pre_selected_doctor
-                    print(f"✓ Using auto-detected doctor: {pre_selected_doctor}")
-                
-                # ============ ONLY if no pre-selected doctor, validate OpenAI's ID ============
+                    print(f"Using auto-detected doctor: {pre_selected_doctor}")
+
                 elif doctor_id and doctor_id.startswith("DOC") and available_doctors:
-                    # Verify it exists in available doctors
                     valid = any(d["doctor_id"] == doctor_id for d in available_doctors)
                     if valid:
-                        print(f"✓ Valid doctor_id: {doctor_id}")
+                        print(f"Valid doctor_id: {doctor_id}")
                     else:
-                        print(f"⚠ doctor_id {doctor_id} not in available doctors, will resolve...")
-                        # Try to resolve from available doctors
+                        print(f"doctor_id {doctor_id} not in available doctors, will resolve...")
                         resolved_id = self._resolve_doctor_id(doctor_id, available_doctors)
                         if resolved_id:
                             arguments["doctor_id"] = resolved_id
                             print(f"✓ Resolved to: {resolved_id}")
                         else:
-                            # Could not resolve - use first available if only one
                             if len(available_doctors) == 1:
                                 arguments["doctor_id"] = available_doctors[0]["doctor_id"]
-                                print(f"⚠ Using only available doctor: {available_doctors[0]['doctor_id']}")
+                                print(f"Using only available doctor: {available_doctors[0]['doctor_id']}")
                             else:
-                                print("❌ Could not resolve doctor. Asking for clarification.")
+                                print("Could not resolve doctor. Asking for clarification.")
                                 clarification_text = "I'm sorry, I couldn't identify that doctor. Could you please tell me which doctor you'd like to see from the available list?"
                                 
                                 redis_service.append_to_conversation(call_sid, "assistant", clarification_text)
@@ -466,29 +418,24 @@ class VoiceAgentService:
                                     "response": clarification_text,
                                     "function_called": False,
                                 }
-                
-                # ============ Try to resolve from name or use first available ============
+
                 elif available_doctors:
                     if len(available_doctors) == 1:
-                        # Only one doctor available - use it!
                         arguments["doctor_id"] = available_doctors[0]["doctor_id"]
-                        print(f"✓ Using only available doctor: {available_doctors[0]['doctor_id']}")
+                        print(f"Using only available doctor: {available_doctors[0]['doctor_id']}")
                     elif doctor_id:
-                        # Try to resolve from available doctors
                         resolved_id = self._resolve_doctor_id(doctor_id, available_doctors)
                         if resolved_id:
                             arguments["doctor_id"] = resolved_id
-                            print(f"✓ Resolved from name/number: {resolved_id}")
+                            print(f"Resolved from name/number: {resolved_id}")
                         else:
-                            # Use first available as fallback
                             arguments["doctor_id"] = available_doctors[0]["doctor_id"]
-                            print(f"⚠ Using first available doctor: {available_doctors[0]['doctor_id']}")
+                            print(f"Using first available doctor: {available_doctors[0]['doctor_id']}")
                     else:
-                        # No doctor specified - use first available
                         arguments["doctor_id"] = available_doctors[0]["doctor_id"]
-                        print(f"⚠ No doctor specified, using first available: {available_doctors[0]['doctor_id']}")
+                        print(f"No doctor specified, using first available: {available_doctors[0]['doctor_id']}")
                 else:
-                    print(f"❌ No available doctors in session!")
+                    print(f"No available doctors in session!")
                     clarification_text = "I'm sorry, I don't have the doctor information. Could you please tell me which doctor you'd like to see?"
                     
                     redis_service.append_to_conversation(call_sid, "assistant", clarification_text)
@@ -497,46 +444,39 @@ class VoiceAgentService:
                         "response": clarification_text,
                         "function_called": False,
                     }
-            
-            # ============ EXECUTE FUNCTION (ONLY ONCE!) ============
-            print(f"🔧 Executing function: {function_name}")
+
+            print(f"Executing function: {function_name}")
             function_result = self.ai_tools.execute_function(
                 function_name,
                 arguments
             )
             
-            print(f"   ✓ Result success: {function_result.get('success', False)}")
-            
-            # ============ FIX 2: STORE DOCTORS IN SESSION ============
+            print(f"Result success: {function_result.get('success', False)}")
+
             if function_name == "get_available_doctors" and function_result.get("success"):
                 doctors = function_result.get("doctors", [])
                 if doctors:
                     redis_service.update_session(call_sid, {
                         "available_doctors": doctors
                     })
-                    print(f"✓ Stored {len(doctors)} doctors in session")
-                    
-                    # Log the doctors for debugging
+                    print(f"Stored {len(doctors)} doctors in session")
+
                     for doc in doctors:
                         print(f"   - {doc['name']} ({doc['specialization']})")
-            # ============ END FIX 2 ============
-            
-            # Store selected doctor after successful get_available_slots
+
             if function_name == "get_available_slots" and function_result.get("success"):
                 doctor_id = arguments.get("doctor_id")
                 if doctor_id:
                     redis_service.update_session(call_sid, {
                         "selected_doctor_id": doctor_id
                     })
-                    print(f"✓ Stored selected doctor: {doctor_id}")
-            
-            # Generate natural language response
+                    print(f"Stored selected doctor: {doctor_id}")
+
             response_text = self._generate_response_from_function_result(
                 function_name,
                 function_result
             )
             
-            # Add to conversation
             redis_service.append_to_conversation(call_sid, "assistant", response_text)
             
             return {
@@ -548,7 +488,7 @@ class VoiceAgentService:
             }
             
         except Exception as e:
-            print(f"❌ Error handling function call: {e}")
+            print(f"Error handling function call: {e}")
             import traceback
             traceback.print_exc()
             
@@ -565,7 +505,6 @@ class VoiceAgentService:
         arguments: Dict[str, Any],
         result: Dict[str, Any]
     ):
-        """Update session based on function execution"""
         updates = {}
         
         if function_name == "book_appointment" and result.get("success"):
@@ -583,78 +522,8 @@ class VoiceAgentService:
         
         if updates:
             redis_service.update_session(call_sid, updates)
-    
-    """async def _generate_ai_response_with_context(
-        self,
-        call_sid: str,
-        function_result: Dict[str, Any],
-        function_name: str
-    ) -> str:
-        try:
-            # Get session
-            session = redis_service.get_session(call_sid)
-            conversation_history = session.get("conversation_history", [])
-            
-            # Create context message for GPT
-            if function_name == "get_available_doctors":
-                if function_result.get("success"):
-                    doctors = function_result.get("doctors", [])
-                    
-                    # ==================== UPDATE THIS SECTION ====================
-                    # Format doctor list with IDs explicitly
-                    doctor_descriptions = []
-                    for i, doc in enumerate(doctors, 1):
-                        doctor_descriptions.append(
-                            f"{i}. Dr. {doc['name']} ({doc['degree']}) - ID: {doc['doctor_id']}"
-                        )
-                    
-                    context = (
-                        f"Available doctors:\n" + "\n".join(doctor_descriptions) +
-                        f"\n\nIMPORTANT: When calling get_available_slots, use the exact doctor_id "
-                        f"from this list (like {doctors[0]['doctor_id']}), NOT the number."
-                    )
-                    # ==================== END UPDATE ====================
-                else:
-                    context = "No doctors are currently available."
-            
-            elif function_name == "get_available_slots":
-                if function_result.get("success"):
-                    slots = function_result.get("slots", [])
-                    context = f"Available time slots: {', '.join(slots[:10])}"
-                else:
-                    context = function_result.get("error", "No slots available")
-            
-            elif function_name == "book_appointment":
-                if function_result.get("success"):
-                    confirmation = function_result.get("confirmation_number")
-                    context = f"Appointment successfully booked! Confirmation: {confirmation}"
-                else:
-                    context = f"Booking failed: {function_result.get('error')}"
-            
-            else:
-                context = str(function_result)
-            
-            # Generate natural response using GPT
-           prompt = 
-           f
-           #Based on this information:
-    #{context}
-
-   # Generate a natural, conversational response to the user. Be warm and helpful.
-            
-            response = await openai_service.generate_simple_response(
-                prompt,
-                conversation_history[-3:] if len(conversation_history) > 3 else conversation_history
-            )
-            
-            return response
-            
-        except Exception as e:
-            print(f"Error generating AI response: {e}")
-            return "Let me help you with that."""
 
     def _group_slots_by_hour(self, slots: List[str]) -> Dict[int, List[str]]:
-        """Groups a list of time slots (HH:MM) by hour."""
         hourly_slots = defaultdict(list)
         for slot in slots:
             try:
@@ -665,7 +534,6 @@ class VoiceAgentService:
         return dict(sorted(hourly_slots.items()))
 
     async def end_call(self, call_sid: str) -> Dict[str, Any]:
-        """End call and cleanup"""
         try:
             session = redis_service.get_session(call_sid)
 
@@ -731,10 +599,8 @@ class VoiceAgentService:
             print(f"Error sending SMS: {e}")
 
     def _extract_doctor_from_speech(self, user_text: str, available_doctors: List[Dict]) -> str:
-        """Extract doctor selection from user speech"""
         user_lower = user_text.lower()
-        
-        # Check for ordinal selection (first, second, third)
+
         ordinals = {
             'first': 0, '1st': 0, 'one': 0,
             'second': 1, '2nd': 1, 'two': 1,
@@ -744,8 +610,7 @@ class VoiceAgentService:
         for word, index in ordinals.items():
             if word in user_lower and index < len(available_doctors):
                 return available_doctors[index]["doctor_id"]
-        
-        # Check for doctor name match
+
         for doctor in available_doctors:
             name_parts = doctor["name"].lower().split()
             for part in name_parts:

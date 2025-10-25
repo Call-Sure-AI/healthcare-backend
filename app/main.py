@@ -20,7 +20,9 @@ from app.services.redis_service import redis_service
 from app.config.voice_config import voice_config
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
+import inspect
 import logging
+
 logging.basicConfig(level=logging.DEBUG)
 
 Base.metadata.create_all(bind=engine)
@@ -91,9 +93,9 @@ app.add_middleware(
 
 app.add_middleware(
     TrustedHostMiddleware,
-    allowed_hosts=["*"]  # Allow all hosts for WebSocket compatibility
+    allowed_hosts=["*"]  # All hosts allowed for WebSocket compatibility
 )
-# Add a middleware to log all requests
+
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     print(f"Request path: {request.url.path}")
@@ -107,12 +109,10 @@ async def log_requests(request: Request, call_next):
     
     response = await call_next(request)
     return response
-# Custom middleware to handle WebSocket headers
+
 class WebSocketMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
-        # Don't validate origin for WebSocket endpoints
         if request.url.path == "/api/v1/voice/stream":
-            # Remove problematic headers
             if "origin" in request.headers:
                 request.scope["headers"] = [
                     (k, v) for k, v in request.scope["headers"] 
@@ -123,30 +123,6 @@ class WebSocketMiddleware(BaseHTTPMiddleware):
         return response
 
 app.add_middleware(WebSocketMiddleware)
-
-"""@app.middleware("http")
-async def log_requests(request: Request, call_next):
-
-    if request.scope.get("type") == "websocket":
-        return await call_next(request)
-
-    if "/stream" in request.url.path or request.url.path.startswith("/api/v1/voice/stream"):
-        return await call_next(request)
-    
-    start_time = time.time()
-    response = await call_next(request)
-    process_time = time.time() - start_time
-
-    if hasattr(response, 'headers') and response.status_code != 101:
-        try:
-            response.headers["X-Process-Time"] = str(process_time)
-        except Exception:
-            pass
-    
-    print(f"{request.method} {request.url.path} - Status: {response.status_code} - Time: {process_time:.4f}s")
-    return response"""
-
-
 
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
@@ -277,7 +253,6 @@ def api_status():
 
 @app.get("/debug/routes", tags=["System"])
 def list_routes():
-    """List all registered routes including WebSockets"""
     routes = []
     for route in app.routes:
         route_info = {
@@ -285,11 +260,8 @@ def list_routes():
             "name": getattr(route, "name", "N/A"),
         }
         
-        # Check if it's a WebSocket route
         if hasattr(route, "endpoint"):
-            import inspect
             if inspect.iscoroutinefunction(route.endpoint):
-                # Check the signature for WebSocket parameter
                 sig = inspect.signature(route.endpoint)
                 if any("WebSocket" in str(param.annotation) for param in sig.parameters.values()):
                     route_info["type"] = "WebSocket"

@@ -8,17 +8,12 @@ openai.api_key = voice_config.OPENAI_API_KEY
 
 
 class OpenAIService:
-    """Service for OpenAI API interactions"""
-    
     def __init__(self):
         self.model = voice_config.OPENAI_MODEL
         self.voice = voice_config.OPENAI_VOICE
         self.system_prompt = voice_config.SYSTEM_PROMPT
     
     async def transcribe_audio(self, audio_file) -> Optional[str]:
-        """
-        Transcribe audio using Whisper API
-        """
         try:
             response = openai.audio.transcriptions.create(
                 model=voice_config.OPENAI_STT_MODEL,
@@ -31,9 +26,6 @@ class OpenAIService:
             return None
     
     async def generate_speech(self, text: str) -> Optional[bytes]:
-        """
-        Generate speech using OpenAI TTS
-        """
         try:
             response = openai.audio.speech.create(
                 model=voice_config.OPENAI_TTS_MODEL,
@@ -52,9 +44,6 @@ class OpenAIService:
         functions: Optional[List[Dict[str, Any]]] = None,
         temperature: float = 0.7
     ) -> Optional[Dict[str, Any]]:
-        """
-        Get chat completion from GPT-4
-        """
         try:
             params = {
                 "model": self.model,
@@ -80,19 +69,14 @@ class OpenAIService:
         conversation_history: List[Dict[str, str]],
         include_system: bool = True
     ) -> List[Dict[str, str]]:
-        """
-        Build messages array for GPT-4 with dynamic system prompt
-        """
         messages = []
         
         if include_system:
-            # ============ CRITICAL: Add current date to system prompt ============
             current_date = datetime.now()
-            current_date_str = current_date.strftime("%B %d, %Y")  # "October 25, 2025"
+            current_date_str = current_date.strftime("%B %d, %Y")
             current_year = current_date.year
-            day_of_week = current_date.strftime("%A")  # "Saturday"
-            
-            # Enhanced system prompt with current date context
+            day_of_week = current_date.strftime("%A")
+
             enhanced_system_prompt = f"""{self.system_prompt}
 
     IMPORTANT DATE INFORMATION:
@@ -122,14 +106,6 @@ class OpenAIService:
         conversation_history: List[Dict[str, str]],
         available_functions: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
-        """
-        Process user input and generate response
-        Returns: {
-            "response": "text response",
-            "function_call": {...} or None,
-            "finish_reason": "stop" | "tool_calls"
-        }
-        """
         try:
             messages = self.build_conversation_messages(conversation_history)
             messages.append({"role": "user", "content": user_message})
@@ -176,5 +152,5 @@ class OpenAIService:
             }
 
 
-# Global instance
+# Open AI Global instance
 openai_service = OpenAIService()

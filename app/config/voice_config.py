@@ -26,13 +26,11 @@ class VoiceAgentConfig:
     CALL_SESSION_TTL = int(os.getenv("CALL_SESSION_TTL"))
     MAX_CALL_DURATION = int(os.getenv("MAX_CALL_DURATION"))
     MAX_RETRY_ATTEMPTS = int(os.getenv("MAX_RETRY_ATTEMPTS"))
-    
-    # Feature Flags
+
     VOICE_AGENT_ENABLED = os.getenv("VOICE_AGENT_ENABLED").lower() == "true"
     ENABLE_CALL_RECORDING = os.getenv("ENABLE_CALL_RECORDING").lower() == "true"
     ENABLE_SMS_CONFIRMATION = os.getenv("ENABLE_SMS_CONFIRMATION").lower() == "true"
-    
-    # Clinic Information
+
     CLINIC_NAME = os.getenv("CLINIC_NAME", "HealthCare Clinic")
     CLINIC_ADDRESS = os.getenv("CLINIC_ADDRESS", "123 Health Street")
     CLINIC_PHONE = os.getenv("CLINIC_PHONE", TWILIO_PHONE_NUMBER)

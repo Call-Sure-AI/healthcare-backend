@@ -5,8 +5,6 @@ from app.config.voice_config import voice_config
 
 
 class TwilioService:
-    """Service for Twilio Voice operations"""
-    
     def __init__(self):
         self.account_sid = voice_config.TWILIO_ACCOUNT_SID
         self.auth_token = voice_config.TWILIO_AUTH_TOKEN
@@ -16,29 +14,15 @@ class TwilioService:
     def create_welcome_response(self, websocket_url: str) -> str:
         response = VoiceResponse()
 
-        # Option A: Let your app handle all audio over the stream (recommended)
         with response.connect() as connect:
             connect.stream(
                 url=websocket_url,
-                track="both_tracks"  # allow inbound + outbound on the same stream
+                track="both_tracks"
             )
-
-        # Option B: If you want Twilio to speak first, do it BEFORE connect:
-        # response.say(
-        #     f"Hello! Thank you for calling {voice_config.CLINIC_NAME}. "
-        #     "I'm here to help you book an appointment. How may I assist you today?",
-        #     voice="Polly.Aditi",
-        #     language="en-IN",
-        # )
-        # with response.connect() as connect:
-        #     connect.stream(url=websocket_url, track="both_tracks")
 
         return str(response)
     
     def create_gather_response(self, text: str, action_url: str) -> str:
-        """
-        Create TwiML response with speech gathering
-        """
         response = VoiceResponse()
         
         gather = Gather(
@@ -67,9 +51,6 @@ class TwilioService:
         return str(response)
     
     def create_say_response(self, text: str, hangup: bool = False) -> str:
-        """
-        Create simple say response
-        """
         response = VoiceResponse()
         
         response.say(
@@ -84,19 +65,16 @@ class TwilioService:
         return str(response)
     
     def send_sms(self, to_number: str, message: str) -> bool:
-        """
-        Send SMS confirmation
-        """
         try:
             message = self.client.messages.create(
                 body=message,
                 from_=self.phone_number,
                 to=to_number
             )
-            print(f"✅ SMS sent: {message.sid}")
+            print(f"SMS sent: {message.sid}")
             return True
         except Exception as e:
-            print(f"❌ SMS send error: {e}")
+            print(f"SMS send error: {e}")
             return False
     
     def send_appointment_confirmation_sms(
@@ -108,9 +86,6 @@ class TwilioService:
         time: str,
         appointment_id: int
     ) -> bool:
-        """
-        Send appointment confirmation SMS
-        """
         message = f"""Hi {patient_name}!
 
 Your appointment is confirmed:
@@ -129,9 +104,6 @@ Reply CANCEL to cancel.
         return self.send_sms(to_number, message)
     
     def get_call_details(self, call_sid: str) -> Optional[dict]:
-        """
-        Get call details from Twilio
-        """
         try:
             call = self.client.calls(call_sid).fetch()
             return {
@@ -148,9 +120,6 @@ Reply CANCEL to cancel.
             return None
     
     def end_call(self, call_sid: str) -> bool:
-        """
-        End an active call
-        """
         try:
             self.client.calls(call_sid).update(status='completed')
             return True
@@ -159,5 +128,5 @@ Reply CANCEL to cancel.
             return False
 
 
-# Global instance
+# Twillio Global instance
 twilio_service = TwilioService()

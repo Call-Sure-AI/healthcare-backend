@@ -10,16 +10,11 @@ logger = logging.getLogger(__name__)
 
 
 class TTSService:
-    """
-    Manages TTS generation with rate limiting.
-    Uses Deepgram REST API.
-    """
-    
     def __init__(self):
         self.request_queue = deque()
         self.is_processing = False
         self.last_request_time = 0
-        self.min_request_interval = 0.2  # 200ms between requests
+        self.min_request_interval = 0.2
         self.consecutive_failures = 0
         self.max_consecutive_failures = 3
 
@@ -28,20 +23,10 @@ class TTSService:
         text: str,
         partial_response_index: Optional[int] = None
     ) -> AsyncIterator[str]:
-        """
-        Generate audio from text using Deepgram TTS REST API.
-        
-        Args:
-            text: Text to convert to speech
-            partial_response_index: Optional index for tracking
-            
-        Yields:
-            Base64 encoded mulaw/8000 audio chunks
-        """
+
         if not text or not text.strip():
             return
 
-        # Check API key
         if not voice_config.DEEPGRAM_API_KEY:
             logger.error("TTS -> DEEPGRAM_API_KEY not configured")
             return

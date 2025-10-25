@@ -12,7 +12,6 @@ def create_appointment(appointment: AppointmentCreate, db: Session = Depends(get
     """Book a new appointment"""
     return AppointmentService.create_appointment(db, appointment)
 
-# NEW ENDPOINT - Check available slots
 @router.get("/available-slots/{doctor_id}/{date}")
 def get_available_slots(doctor_id: str, date: str, db: Session = Depends(get_db)):
     """Get available time slots for a doctor on a specific date"""

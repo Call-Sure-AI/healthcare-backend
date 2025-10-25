@@ -8,31 +8,22 @@ from collections import defaultdict
 from app.models.doctor import Doctor
 
 class AppointmentService:
-    # Maximum appointments per hour per doctor
     MAX_APPOINTMENTS_PER_HOUR = 4
     APPOINTMENT_INTERVAL_MINUTES = 15
     
     @staticmethod
     def get_hour_from_time(time_str: str) -> int:
-        """Extract hour from time string (HH:MM format)"""
         return int(time_str.split(":")[0])
     
     @staticmethod
     def check_hourly_capacity(db: Session, doctor_id: str, appointment_date: str, appointment_time: str):
-        """
-        Check if the doctor has capacity in the requested hour.
-        Maximum 4 appointments per hour allowed.
-        """
         appointment_hour = AppointmentService.get_hour_from_time(appointment_time)
-        
-        # Query all scheduled appointments for this doctor on this date
         scheduled_appointments = db.query(Appointment).filter(
             Appointment.doctor_id == doctor_id,
             Appointment.appointment_date == appointment_date,
             Appointment.status == AppointmentStatus.SCHEDULED
         ).all()
-        
-        # Count appointments in the requested hour
+
         appointments_in_hour = 0
         for apt in scheduled_appointments:
             apt_hour = AppointmentService.get_hour_from_time(apt.appointment_time)
@@ -49,12 +40,10 @@ class AppointmentService:
     
     @staticmethod
     def validate_time_format(appointment_time: str):
-        """Validate that appointment time is in 15-minute intervals"""
         try:
             time_obj = datetime.strptime(appointment_time, "%H:%M")
             minutes = time_obj.minute
-            
-            # Check if minutes are in 15-minute intervals (0, 15, 30, 45)
+
             if minutes not in [0, 15, 30, 45]:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -69,31 +58,23 @@ class AppointmentService:
     
     @staticmethod
     def validate_appointment_availability(doctor, appointment_date: str, appointment_time: str):
-        """
-        Validate if the appointment falls within doctor's availability
-        """
-        # Check if appointment date is in doctor's availability_dates
         if appointment_date not in doctor.availability_dates:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Doctor is not available on {appointment_date}. Available dates: {', '.join(doctor.availability_dates)}"
             )
-        
-        # Get the day of week from appointment date
+
         date_obj = datetime.strptime(appointment_date, "%Y-%m-%d")
         day_name = date_obj.strftime("%A").lower()
-        
-        # Check if doctor has shift timings for this day
+
         if day_name not in doctor.shift_timings:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Doctor has no shift scheduled for {day_name.capitalize()}"
             )
-        
-        # Validate time format and 15-minute intervals
+
         appointment_time_obj = AppointmentService.validate_time_format(appointment_time)
-        
-        # Check if appointment time falls within any of the shift timings
+
         shift_slots = doctor.shift_timings[day_name]
         is_within_shift = False
         
@@ -122,25 +103,21 @@ class AppointmentService:
     
     @staticmethod
     def create_appointment(db: Session, appointment_data: AppointmentCreate):
-        # Verify doctor exists
         doctor = DoctorService.get_doctor_by_id(db, appointment_data.doctor_id)
-        
-        # Validate appointment time format and shift availability
+
         AppointmentService.validate_appointment_availability(
             doctor, 
             appointment_data.appointment_date, 
             appointment_data.appointment_time
         )
-        
-        # Check hourly capacity (max 4 per hour)
+
         AppointmentService.check_hourly_capacity(
             db,
             appointment_data.doctor_id,
             appointment_data.appointment_date,
             appointment_data.appointment_time
         )
-        
-        # Check for exact time slot conflict
+
         existing_appointment = db.query(Appointment).filter(
             Appointment.doctor_id == appointment_data.doctor_id,
             Appointment.appointment_date == appointment_data.appointment_date,
@@ -162,9 +139,6 @@ class AppointmentService:
     
     @staticmethod
     def generate_time_slots(start_time_str: str, end_time_str: str, date_obj: datetime) -> list:
-        """
-        Generate 15-minute interval time slots between start and end time
-        """
         start_time = datetime.strptime(start_time_str.strip(), "%H:%M")
         end_time = datetime.strptime(end_time_str.strip(), "%H:%M")
         
@@ -179,42 +153,33 @@ class AppointmentService:
     
     @staticmethod
     def get_available_slots(db: Session, doctor_id: str, appointment_date: str):
-        """
-        Get all available 15-minute time slots for a doctor on a specific date.
-        Each hour can have maximum 4 appointments.
-        """
         doctor = DoctorService.get_doctor_by_id(db, doctor_id)
-        
-        # Check if date is available
+
         if appointment_date not in doctor.availability_dates:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Doctor is not available on {appointment_date}"
             )
-        
-        # Get day of week
+
         date_obj = datetime.strptime(appointment_date, "%Y-%m-%d")
         day_name = date_obj.strftime("%A").lower()
         
         if day_name not in doctor.shift_timings:
             return {"available_slots": [], "message": f"No shift scheduled for {day_name.capitalize()}"}
-        
-        # Get all scheduled appointments for this doctor on this date
+
         scheduled_appointments = db.query(Appointment).filter(
             Appointment.doctor_id == doctor_id,
             Appointment.appointment_date == appointment_date,
             Appointment.status == AppointmentStatus.SCHEDULED
         ).all()
-        
-        # Create a dictionary to track booked times and hourly counts
+
         booked_times = set(apt.appointment_time for apt in scheduled_appointments)
         hourly_counts = defaultdict(int)
         
         for apt in scheduled_appointments:
             hour = AppointmentService.get_hour_from_time(apt.appointment_time)
             hourly_counts[hour] += 1
-        
-        # Generate all possible 15-minute slots
+
         all_slots = []
         shift_slots = doctor.shift_timings[day_name]
         
@@ -222,19 +187,14 @@ class AppointmentService:
             start_time_str, end_time_str = shift_slot.split("-")
             slots = AppointmentService.generate_time_slots(start_time_str, end_time_str, date_obj)
             all_slots.extend(slots)
-        
-        # Filter available slots based on:
-        # 1. Not already booked
-        # 2. Hour hasn't reached capacity (4 appointments)
+
         available_slots = []
         for slot in all_slots:
             hour = AppointmentService.get_hour_from_time(slot)
-            
-            # Check if slot is not booked and hour hasn't reached capacity
+
             if slot not in booked_times and hourly_counts[hour] < AppointmentService.MAX_APPOINTMENTS_PER_HOUR:
                 available_slots.append(slot)
-        
-        # Calculate statistics
+
         total_slots = len(all_slots)
         booked_slots = len(booked_times)
         
@@ -272,9 +232,6 @@ class AppointmentService:
     
     @staticmethod
     def get_doctor_statistics(db: Session, doctor_id: str, appointment_date: str):
-        """
-        Get statistics about appointments for a doctor on a specific date
-        """
         doctor = DoctorService.get_doctor_by_id(db, doctor_id)
         
         scheduled_appointments = db.query(Appointment).filter(
@@ -282,8 +239,7 @@ class AppointmentService:
             Appointment.appointment_date == appointment_date,
             Appointment.status == AppointmentStatus.SCHEDULED
         ).all()
-        
-        # Calculate hourly distribution
+
         hourly_distribution = defaultdict(list)
         for apt in scheduled_appointments:
             hour = AppointmentService.get_hour_from_time(apt.appointment_time)
@@ -291,8 +247,7 @@ class AppointmentService:
                 "time": apt.appointment_time,
                 "patient": apt.patient_name
             })
-        
-        # Calculate total capacity
+
         date_obj = datetime.strptime(appointment_date, "%Y-%m-%d")
         day_name = date_obj.strftime("%A").lower()
         
@@ -344,8 +299,7 @@ class AppointmentService:
     @staticmethod
     def update_appointment(db: Session, appointment_id: int, appointment_data: AppointmentUpdate):
         appointment = AppointmentService.get_appointment_by_id(db, appointment_id)
-        
-        # If updating date or time, validate availability and capacity
+
         if appointment_data.appointment_date or appointment_data.appointment_time:
             doctor = DoctorService.get_doctor_by_id(db, appointment.doctor_id)
             new_date = appointment_data.appointment_date or appointment.appointment_date

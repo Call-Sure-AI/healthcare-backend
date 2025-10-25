@@ -17,4 +17,4 @@ class Doctor(Base):
     shift_timings = Column(JSON, nullable=False)
     availability_dates = Column(JSON, nullable=False)
     status = Column(SQLEnum(DoctorStatus), default=DoctorStatus.ACTIVE)
-    specialization = Column(String(100), default="General Medicine")  # ← NEW FIELD
+    specialization = Column(String(100), default="General Medicine")

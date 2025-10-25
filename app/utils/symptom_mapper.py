@@ -1,6 +1,5 @@
 from typing import List, Optional
 
-# Comprehensive symptom-to-specialization mapping
 SYMPTOM_SPECIALIZATION_MAP = {
     "Cardiology": [
         "cardio", "cardiologist", "heart", "cardiac", "chest pain", 
@@ -46,18 +45,13 @@ SYMPTOM_SPECIALIZATION_MAP = {
 
 
 def extract_specialization_from_text(text: str) -> Optional[str]:
-    """
-    Analyze user text (symptoms/reason) and return the matching specialization.
-    Returns None if no clear match is found.
-    """
     if not text:
-        print(f"⚠️  Empty text provided")
+        print(f"Empty text provided")
         return None
         
     text_lower = text.lower()
-    print(f"🔍 Analyzing text: '{text_lower}'")
-    
-    # Track matches with scores
+    print(f"Analyzing text: '{text_lower}'")
+
     specialization_scores = {}
     
     for specialization, keywords in SYMPTOM_SPECIALIZATION_MAP.items():
@@ -66,22 +60,20 @@ def extract_specialization_from_text(text: str) -> Optional[str]:
         
         for keyword in keywords:
             if keyword in text_lower:
-                # Longer keywords get higher scores (more specific)
                 keyword_score = len(keyword.split())
                 score += keyword_score
                 matched_keywords.append(keyword)
         
         if score > 0:
             specialization_scores[specialization] = score
-            print(f"   ✓ Matched '{specialization}' (score: {score}, keywords: {matched_keywords})")
-    
-    # Return specialization with highest score
+            print(f"Matched '{specialization}' (score: {score}, keywords: {matched_keywords})")
+
     if specialization_scores:
         best_match = max(specialization_scores, key=specialization_scores.get)
-        print(f"🎯 Detected specialization: {best_match} (from '{text}')")
+        print(f"Detected specialization: {best_match} (from '{text}')")
         return best_match
     
-    print(f"❌ No specialization detected in: '{text}'")
+    print(f"No specialization detected in: '{text}'")
     return None
 
 
@@ -89,33 +81,28 @@ def filter_doctors_by_specialization(
     doctors: List[dict],
     specialization: Optional[str]
 ) -> List[dict]:
-    """
-    Filter doctors list by specialization.
-    If no specialization provided or no matches, return top 5 doctors.
-    """
+
     if not doctors:
-        print(f"⚠️  No doctors provided to filter")
+        print(f"No doctors provided to filter")
         return []
     
     if not specialization:
-        # Return max 5 doctors if no specialization specified
-        print(f"ℹ️  No specialization specified, returning first 5 doctors")
+        print(f"No specialization specified, returning first 5 doctors")
         return doctors[:5]
     
-    print(f"🔍 Filtering {len(doctors)} doctors for specialization: '{specialization}'")
+    print(f"Filtering {len(doctors)} doctors for specialization: '{specialization}'")
     
-    # Filter doctors matching the specialization (case-insensitive)
     filtered = [
         doc for doc in doctors 
         if doc.get("specialization", "").lower() == specialization.lower()
     ]
     
     if filtered:
-        print(f"✅ Found {len(filtered)} doctor(s) for '{specialization}':")
+        print(f"Found {len(filtered)} doctor(s) for '{specialization}':")
         for doc in filtered:
             print(f"   - {doc['name']} (ID: {doc['doctor_id']})")
         return filtered
     else:
-        print(f"⚠️  No '{specialization}' specialists found in database")
+        print(f"No '{specialization}' specialists found in database")
         print(f"   Returning first 5 general doctors as fallback")
         return doctors[:5]
