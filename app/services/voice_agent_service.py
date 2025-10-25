@@ -404,50 +404,83 @@ class VoiceAgentService:
                 print(f"📋 User context for doctor filtering: '{user_context}'")
                 print(f"   (Extracted from {len(user_messages)} user messages)")
 
-            if function_name in ["get_available_slots", "book_appointment", "get_doctor_schedule"]:
+            if function_name in ["get_available_slots", "book_appointment_in_hour_range", "get_doctor_schedule"]:
                 doctor_id = arguments.get("doctor_id", "")
                 
-                # Get available doctors from session
+                # Get available doctors and pre-selected doctor from session
                 available_doctors = session.get("available_doctors", [])
+                pre_selected_doctor = session.get("selected_doctor_id")  # ← From auto-detection!
                 
                 print(f"Resolving doctor_id: '{doctor_id}'")
                 print(f"Available doctors in session: {len(available_doctors)}")
+                if pre_selected_doctor:
+                    print(f"✓ Pre-selected doctor from auto-detection: {pre_selected_doctor}")
                 
-                # Strategy 1: Check if already a valid DOC ID
-                if doctor_id and doctor_id.startswith("DOC"):
+                # ============ CRITICAL: Check pre-selected doctor FIRST ============
+                if pre_selected_doctor:
+                    # Auto-detection already found the doctor - use it immediately!
+                    arguments["doctor_id"] = pre_selected_doctor
+                    print(f"✓ Using auto-detected doctor: {pre_selected_doctor}")
+                
+                # ============ ONLY if no pre-selected doctor, validate OpenAI's ID ============
+                elif doctor_id and doctor_id.startswith("DOC") and available_doctors:
                     # Verify it exists in available doctors
                     valid = any(d["doctor_id"] == doctor_id for d in available_doctors)
                     if valid:
                         print(f"✓ Valid doctor_id: {doctor_id}")
                     else:
                         print(f"⚠ doctor_id {doctor_id} not in available doctors, will resolve...")
-                        doctor_id = None
-                
-                # Strategy 2: Resolve from name/index if needed
-                if not doctor_id or not doctor_id.startswith("DOC"):
-                    # First check pre-selected doctor
-                    selected_doctor_id = session.get("selected_doctor_id")
-                    if selected_doctor_id:
-                        arguments["doctor_id"] = selected_doctor_id
-                        print(f"✓ Using pre-selected doctor: {selected_doctor_id}")
-                    elif available_doctors:
                         # Try to resolve from available doctors
                         resolved_id = self._resolve_doctor_id(doctor_id, available_doctors)
                         if resolved_id:
                             arguments["doctor_id"] = resolved_id
                             print(f"✓ Resolved to: {resolved_id}")
                         else:
-                            print("❌ Could not resolve doctor. Asking for clarification.")
-                            clarification_text = "I'm sorry, I couldn't identify that doctor. Could you please tell me the name of the doctor you'd like to see from the available list?"
-                            
-                            redis_service.append_to_conversation(call_sid, "assistant", clarification_text)
-                            return {
-                                "success": True,
-                                "response": clarification_text,
-                                "function_called": False,
-                            }
+                            # Could not resolve - use first available if only one
+                            if len(available_doctors) == 1:
+                                arguments["doctor_id"] = available_doctors[0]["doctor_id"]
+                                print(f"⚠ Using only available doctor: {available_doctors[0]['doctor_id']}")
+                            else:
+                                print("❌ Could not resolve doctor. Asking for clarification.")
+                                clarification_text = "I'm sorry, I couldn't identify that doctor. Could you please tell me which doctor you'd like to see from the available list?"
+                                
+                                redis_service.append_to_conversation(call_sid, "assistant", clarification_text)
+                                return {
+                                    "success": True,
+                                    "response": clarification_text,
+                                    "function_called": False,
+                                }
+                
+                # ============ Try to resolve from name or use first available ============
+                elif available_doctors:
+                    if len(available_doctors) == 1:
+                        # Only one doctor available - use it!
+                        arguments["doctor_id"] = available_doctors[0]["doctor_id"]
+                        print(f"✓ Using only available doctor: {available_doctors[0]['doctor_id']}")
+                    elif doctor_id:
+                        # Try to resolve from available doctors
+                        resolved_id = self._resolve_doctor_id(doctor_id, available_doctors)
+                        if resolved_id:
+                            arguments["doctor_id"] = resolved_id
+                            print(f"✓ Resolved from name/number: {resolved_id}")
+                        else:
+                            # Use first available as fallback
+                            arguments["doctor_id"] = available_doctors[0]["doctor_id"]
+                            print(f"⚠ Using first available doctor: {available_doctors[0]['doctor_id']}")
                     else:
-                        print(f"⚠ No available doctors in session!")
+                        # No doctor specified - use first available
+                        arguments["doctor_id"] = available_doctors[0]["doctor_id"]
+                        print(f"⚠ No doctor specified, using first available: {available_doctors[0]['doctor_id']}")
+                else:
+                    print(f"❌ No available doctors in session!")
+                    clarification_text = "I'm sorry, I don't have the doctor information. Could you please tell me which doctor you'd like to see?"
+                    
+                    redis_service.append_to_conversation(call_sid, "assistant", clarification_text)
+                    return {
+                        "success": True,
+                        "response": clarification_text,
+                        "function_called": False,
+                    }
             
             # ============ EXECUTE FUNCTION (ONLY ONCE!) ============
             print(f"🔧 Executing function: {function_name}")
