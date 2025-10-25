@@ -7,7 +7,8 @@ from app.models.doctor import DoctorStatus
 from app.models.leave import DoctorLeave, LeaveType
 from fastapi import HTTPException, status
 from datetime import datetime, date
-
+from datetime import timedelta
+import json
 
 class DoctorService:
     @staticmethod
@@ -73,12 +74,6 @@ class DoctorService:
 
     @staticmethod
     def leave_doctor(db: Session, doctor_id: str):
-        """
-        Mark doctor as on leave for today:
-        1. Set doctor status to INACTIVE
-        2. Create a full-day leave entry
-        3. Cancel today's scheduled appointments
-        """
         today = date.today()
 
         doctor = DoctorService.get_doctor_by_id(db, doctor_id)
@@ -123,12 +118,6 @@ class DoctorService:
 
     @staticmethod
     def deactivate_leave_doctor(db: Session, doctor_id: str):
-        """
-        Mark doctor as active:
-        1. Set doctor status to ACTIVE
-        2. Delete leave entry if it matches today's date
-        3. Re-schedule today's cancelled appointments
-        """
         today = date.today()
 
         doctor = DoctorService.get_doctor_by_id(db, doctor_id)
@@ -173,28 +162,45 @@ class DoctorService:
         }
 
     @staticmethod
-    def get_doctor_schedule(db: Session, doctor_id: str, start_date: date):
-        """
-        Get the next N available dates for a doctor from a given start date.
-        """
-        from datetime import timedelta
-
+    def get_doctor_schedule(db: Session, doctor_id: str, start_date: date):        
         doctor = DoctorService.get_doctor_by_id(db, doctor_id)
-
         
         available_dates = []
         check_date = start_date
 
+        doctor_available_dates = None
+        if doctor.availability_dates:
+            try:
+                if isinstance(doctor.availability_dates, str):
+                    doctor_available_dates = json.loads(doctor.availability_dates)
+                elif isinstance(doctor.availability_dates, list):
+                    doctor_available_dates = doctor.availability_dates
+            except Exception as e:
+                print(f"Error parsing availability_dates for {doctor_id}: {e}")
+
         while len(available_dates) < 3 and (check_date - start_date).days < 30:
+            check_date_str = check_date.strftime('%Y-%m-%d')
+
             is_on_leave = db.query(DoctorLeave).filter(
                 DoctorLeave.doctor_id == doctor_id,
                 DoctorLeave.start_date <= check_date,
                 DoctorLeave.end_date >= check_date
             ).first()
+            
+            if is_on_leave:
+                check_date += timedelta(days=1)
+                continue
 
-            if check_date.weekday() < 5 and not is_on_leave:
-                available_dates.append(check_date.strftime('%Y-%m-%d'))
+            is_available = False
+            
+            if doctor_available_dates:
+                is_available = check_date_str in doctor_available_dates
+            else:
+                is_available = check_date.weekday() < 5
+            
+            if is_available:
+                available_dates.append(check_date_str)
             
             check_date += timedelta(days=1)
-            
+        
         return available_dates
