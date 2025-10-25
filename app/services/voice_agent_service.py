@@ -299,15 +299,38 @@ class VoiceAgentService:
                 error = result.get("error", "Unable to check availability")
                 return f"I'm having trouble checking availability. {error}. Could you try a different date?"
         
-        elif function_name == "book_appointment":
+        elif function_name == "book_appointment_in_hour_range":
             if result.get("success"):
-                confirmation = result.get("confirmation_number", "")
-                date = result.get("date", "")
-                time = result.get("time", "")
-                return f"Perfect! I've successfully booked your appointment for {date} at {time}. Your confirmation number is {confirmation}. Is there anything else I can help you with?"
+                appointment = result.get("appointment", {})
+                doctor_name = appointment.get("doctor_name", "the doctor")
+                date = appointment.get("appointment_date", "")
+                time = appointment.get("appointment_time", "")
+                confirmation = appointment.get("confirmation_number", "")
+                
+                # Format date nicely
+                try:
+                    from datetime import datetime
+                    date_obj = datetime.strptime(date, "%Y-%m-%d")
+                    formatted_date = date_obj.strftime("%B %d, %Y")  # "October 29, 2025"
+                except:
+                    formatted_date = date
+                
+                return f"Perfect! Your appointment with {doctor_name} is confirmed for {formatted_date} at {time}. Your confirmation number is {confirmation}. You'll receive an SMS confirmation shortly. Is there anything else I can help you with?"
+            
             else:
-                error = result.get("error", "")
-                return f"I'm sorry, I wasn't able to complete the booking. {error}. Would you like to try again?"
+                # Parse the error and provide helpful response
+                error_msg = result.get("error", "")
+                
+                if "no available slot" in error_msg.lower() or "no slots" in error_msg.lower():
+                    return f"I'm sorry, there are no available slots in that time range. {error_msg} Would you like to try a different time?"
+                elif "doctor" in error_msg.lower() and "not found" in error_msg.lower():
+                    return "I'm sorry, I couldn't find that doctor. Could you please choose from the available doctors I mentioned?"
+                elif "past" in error_msg.lower():
+                    return "I'm sorry, that date is in the past. Could you provide a future date?"
+                elif "understand" in error_msg.lower() and "time" in error_msg.lower():
+                    return f"{error_msg} You can say something like '2 PM' or 'between 10 and 11 AM'."
+                else:
+                    return f"I'm sorry, I couldn't book that appointment. {error_msg} Would you like to try a different time?"
 
         elif function_name == "get_doctor_schedule":
             if result.get("success"):

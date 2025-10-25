@@ -2,7 +2,7 @@ import openai
 import json
 from typing import Optional, List, Dict, Any
 from app.config.voice_config import voice_config
-
+from datetime import datetime
 
 openai.api_key = voice_config.OPENAI_API_KEY
 
@@ -81,14 +81,35 @@ class OpenAIService:
         include_system: bool = True
     ) -> List[Dict[str, str]]:
         """
-        Build messages array for GPT-4
+        Build messages array for GPT-4 with dynamic system prompt
         """
         messages = []
         
         if include_system:
+            # ============ CRITICAL: Add current date to system prompt ============
+            current_date = datetime.now()
+            current_date_str = current_date.strftime("%B %d, %Y")  # "October 25, 2025"
+            current_year = current_date.year
+            day_of_week = current_date.strftime("%A")  # "Saturday"
+            
+            # Enhanced system prompt with current date context
+            enhanced_system_prompt = f"""{self.system_prompt}
+
+    IMPORTANT DATE INFORMATION:
+    - Today is {day_of_week}, {current_date_str}
+    - Current year: {current_year}
+    - When users mention dates without a year (e.g., "October 29" or "29th October"), assume they mean {current_year}
+    - If a date would be in the past (e.g., user says "October 20" but today is October 25), assume they mean {current_year + 1}
+    - ALWAYS format dates as YYYY-MM-DD in function calls
+    - Example: User says "October 29" → Use "{current_year}-10-29" in the date field
+    - Example: User says "29th October" → Use "{current_year}-10-29" in the date field
+
+    Remember: You are helping patients book medical appointments. Be professional, warm, and verify all details before confirming bookings.
+    """
+            
             messages.append({
                 "role": "system",
-                "content": self.system_prompt
+                "content": enhanced_system_prompt
             })
 
         messages.extend(conversation_history)

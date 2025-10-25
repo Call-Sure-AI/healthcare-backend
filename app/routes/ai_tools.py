@@ -7,6 +7,7 @@ from app.models.leave import DoctorLeave
 from app.utils.symptom_mapper import extract_specialization_from_text, filter_doctors_by_specialization
 from app.schemas.appointment import AppointmentCreate
 import re
+from fastapi import HTTPException
 
 AI_FUNCTIONS = [
     {
@@ -115,8 +116,8 @@ class AIToolsExecutor:
                 return self.get_available_doctors(**arguments)
             elif function_name == "get_available_slots":
                 return self.get_available_slots(**arguments)
-            elif function_name == "book_appointment":
-                return self.book_appointment(**arguments)
+            elif function_name == "book_appointment_in_hour_range":
+                return self.book_appointment_in_hour_range(**arguments)
             elif function_name == "get_doctor_schedule":
                 return self.get_doctor_schedule(**arguments)
             elif function_name == "get_appointment_details":
@@ -528,50 +529,78 @@ class AIToolsExecutor:
                 "success": False,
                 "error": f"Booking failed: {str(e)}"
             }
+            
     def book_appointment_in_hour_range(
         self,
         patient_name: str,
         patient_phone: str,
         doctor_id: str,
         appointment_date: str,
-        time_range: str, # e.g., "2 PM", "10-11 AM", "between 2 and 3 PM"
+        time_range: str,
         reason: str = ""
     ) -> Dict[str, Any]:
         """
-        Attempts to book the first available slot within a specified hour range.
-        If the first attempt fails, it tries the next available slot in that hour.
+        Book appointment in first available slot within specified hour range.
+        Tries all slots in the hour until one succeeds.
         """
         try:
-
-            print(f"Attempting to book for {patient_name} in time range: '{time_range}'")
+            from fastapi import HTTPException
             
-            # 1. Parse the hour from the time_range string
+            print(f"\n{'='*80}")
+            print(f"📅 Booking appointment in hour range")
+            print(f"   Patient: {patient_name}")
+            print(f"   Phone: {patient_phone}")
+            print(f"   Doctor: {doctor_id}")
+            print(f"   Date: {appointment_date}")
+            print(f"   Time range: {time_range}")
+            print(f"{'='*80}\n")
+            
+            # Parse hour from time_range
             import re
             numbers = re.findall(r'\d+', time_range)
+            
             if not numbers:
-                return {"success": False, "error": "I couldn't understand the time. Please specify an hour, like '2 PM' or 'between 10 and 11 AM'."}
+                return {
+                    "success": False,
+                    "error": "I couldn't understand the time. Please specify an hour like '2 PM' or 'between 10 and 11 AM'."
+                }
             
             hour = int(numbers[0])
+            
+            # Handle PM/AM
             if "pm" in time_range.lower() and hour < 12:
                 hour += 12
+            elif "am" in time_range.lower() and hour == 12:
+                hour = 0
             
-            # 2. Get all available slots for the given date to find ones in the target hour
+            print(f"✓ Parsed hour: {hour}:00-{hour+1}:00")
+            
+            # Get available slots
             slots_result = self.get_available_slots(doctor_id, appointment_date)
+            
             if not slots_result.get("success"):
-                return {"success": False, "error": f"It seems there are no slots available on {appointment_date}."}
-
+                return {
+                    "success": False,
+                    "error": slots_result.get("error", "No slots available on that date")
+                }
+            
             available_slots = slots_result.get("slots", [])
             slots_in_hour = [s for s in available_slots if s.startswith(f"{hour:02d}:")]
-
+            
+            print(f"✓ Found {len(slots_in_hour)} slots in hour {hour}")
+            
             if not slots_in_hour:
-                return {"success": False, "error": f"I'm sorry, but there are no available slots between {hour}:00 and {hour+1}:00. Please choose another time."}
-
-            # 3. Iterate and try to book each slot in the hour range
-            booked_appointment = None
-            last_error = "No available slots found in the selected hour."
-
+                return {
+                    "success": False,
+                    "error": f"No available slots between {hour}:00 and {hour+1}:00. Please choose a different time."
+                }
+            
+            # Try to book each slot until one succeeds
+            last_error = ""
+            
             for slot_to_try in sorted(slots_in_hour):
-                print(f"  -> Trying to book slot: {slot_to_try}")
+                print(f"  → Trying slot: {slot_to_try}")
+                
                 try:
                     appointment_data = AppointmentCreate(
                         patient_name=patient_name.strip(),
@@ -583,42 +612,58 @@ class AIToolsExecutor:
                         status="SCHEDULED"
                     )
                     
-                    # Use the direct service call to attempt booking
                     appointment = AppointmentService.create_appointment(self.db, appointment_data)
                     
                     if appointment:
-                        booked_appointment = appointment
-                        break # Success! Exit the loop.
-
+                        # Get doctor details
+                        doctor = DoctorService.get_doctor_by_id(self.db, doctor_id)
+                        
+                        print(f"✅ Booked successfully at {slot_to_try}!")
+                        print(f"{'='*80}\n")
+                        
+                        return {
+                            "success": True,
+                            "appointment": {
+                                "id": appointment.id,
+                                "confirmation_number": f"APT-{appointment.id}",
+                                "patient_name": appointment.patient_name,
+                                "doctor_id": appointment.doctor_id,
+                                "doctor_name": doctor.name if doctor else "Unknown",
+                                "appointment_date": str(appointment.appointment_date),
+                                "appointment_time": appointment.appointment_time
+                            }
+                        }
+                    
                 except HTTPException as e:
-                    # This exception is raised by create_appointment on failure (e.g., slot taken)
                     last_error = e.detail
-                    print(f"  -> Slot {slot_to_try} failed to book: {e.detail}")
-                    self.db.rollback() # Rollback the failed transaction
-                    continue # Try the next slot
-
-            # 4. Return result
-            if booked_appointment:
-                print(f"Appointment successfully booked: APT-{booked_appointment.id}")
-                return {
-                    "success": True,
-                    "confirmation_number": f"APT-{booked_appointment.id}",
-                    "patient_name": booked_appointment.patient_name,
-                    "doctor_id": booked_appointment.doctor_id,
-                    "date": str(booked_appointment.appointment_date),
-                    "time": booked_appointment.appointment_time
-                }
-            else:
-                print(f"Failed to book any slot in the {hour}:00 hour.")
-                return {
-                    "success": False,
-                    "error": f"I tried all available slots between {hour}:00 and {hour+1}:00, but was unable to book. The last error was: {last_error}. Would you like to try a different hour?"
-                }
-
+                    print(f"  ✗ Slot {slot_to_try} failed: {e.detail}")
+                    self.db.rollback()
+                    continue
+                
+                except Exception as e:
+                    last_error = str(e)
+                    print(f"  ✗ Error: {e}")
+                    self.db.rollback()
+                    continue
+            
+            # All slots failed
+            print(f"❌ No slots could be booked")
+            print(f"{'='*80}\n")
+            
+            return {
+                "success": False,
+                "error": f"All slots between {hour}:00 and {hour+1}:00 are unavailable. {last_error}"
+            }
+            
         except Exception as e:
-            print(f"Major error in book_appointment_in_hour_range: {e}")
+            print(f"❌ Major error: {e}")
+            import traceback
+            traceback.print_exc()
             self.db.rollback()
-            return {"success": False, "error": f"A system error occurred during booking: {str(e)}"}
+            return {
+                "success": False,
+                "error": f"System error: {str(e)}"
+            }
 
 def get_ai_functions() -> List[Dict[str, Any]]:
     """Get list of available functions for GPT-4"""
