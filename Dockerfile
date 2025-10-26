@@ -16,7 +16,7 @@ COPY . .
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8000/health')"
+    CMD python -c "import requests; requests.get('http://localhost:8000/api/health')"
 
 # CRITICAL: Add WebSocket flags to uvicorn
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--ws", "websockets", "--ws-ping-interval", "20", "--ws-ping-timeout", "20", "--proxy-headers", "--forwarded-allow-ips", "*"]
