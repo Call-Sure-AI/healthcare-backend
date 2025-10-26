@@ -180,9 +180,6 @@ async def general_exception_handler(request: Request, exc: Exception):
         }
     )
 
-system_router = APIRouter(prefix="/api", tags=["System"])
-app.include_router(system_router)
-
 @app.websocket("/test-ws")
 async def test_websocket(websocket: WebSocket):
     print("Test WebSocket endpoint hit!")
@@ -190,8 +187,9 @@ async def test_websocket(websocket: WebSocket):
     print("Test WebSocket accepted!")
     await websocket.send_text("Connected successfully!")
     await websocket.close()
-        
-app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
+system_router = APIRouter(prefix="/api", tags=["System"])
 
 @system_router.get("/")
 def api_root():
@@ -266,10 +264,13 @@ def api_status():
             }
         }
     }
+app.include_router(system_router)
 
 app.include_router(doctor.router, prefix="/api/v1", tags=["👨‍⚕️ Doctors"])
 app.include_router(appointment.router, prefix="/api/v1", tags=["📅 Appointments"])
 app.include_router(voice_agent.router, prefix="/api/v1", tags=["Voice Agent"])
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 if __name__ == "__main__":
     import uvicorn
