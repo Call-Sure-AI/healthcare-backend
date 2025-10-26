@@ -60,9 +60,9 @@ app = FastAPI(
         "name": "MIT License",
         "url": "https://opensource.org/licenses/MIT",
     },
-    docs_url="/docs",
-    redoc_url="/redoc",
-    openapi_url="/openapi.json",
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+    openapi_url="/api/openapi.json",
     swagger_ui_parameters={
         "defaultModelsExpandDepth": -1,
         "docExpansion": "none",
@@ -180,11 +180,11 @@ async def general_exception_handler(request: Request, exc: Exception):
         }
     )
 
-
+system_router = APIRouter(prefix="/api", tags=["System"])
 app.include_router(doctor.router, prefix="/api/v1", tags=["👨‍⚕️ Doctors"])
 app.include_router(appointment.router, prefix="/api/v1", tags=["📅 Appointments"])
 app.include_router(voice_agent.router, prefix="/api/v1", tags=["Voice Agent"])
-
+app.include_router(system_router)
 
 @app.websocket("/test-ws")
 async def test_websocket(websocket: WebSocket):
@@ -196,18 +196,18 @@ async def test_websocket(websocket: WebSocket):
         
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-@app.get("/", tags=["System"])
-def root():
-    """Root endpoint with API information"""
+@system_router.get("/")
+def api_root():
+    """Root API endpoint with information"""
     return {
         "success": True,
         "data": {
             "message": "Healthcare Appointment Booking System API",
             "version": "1.0.0",
             "documentation": {
-                "swagger_ui": "/docs",
-                "redoc": "/redoc",
-                "openapi_schema": "/openapi.json"
+                "swagger_ui": "/api/docs",
+                "redoc": "/api/redoc",
+                "openapi_schema": "/api/openapi.json"
             },
             "endpoints": {
                 "doctors": "/api/v1/doctors",
@@ -216,8 +216,7 @@ def root():
         }
     }
 
-
-@app.get("/health", tags=["System"])
+@system_router.get("/health")
 def health_check():
     """Health check endpoint for monitoring"""
     return {
@@ -228,6 +227,27 @@ def health_check():
             "version": "1.0.0"
         }
     }
+
+@system_router.get("/debug/routes")
+def list_routes():
+    routes = []
+    for route in app.routes:
+        route_info = {
+            "path": route.path,
+            "name": getattr(route, "name", "N/A"),
+        }
+        
+        if hasattr(route, "endpoint"):
+            if inspect.iscoroutinefunction(route.endpoint):
+                sig = inspect.signature(route.endpoint)
+                if any("WebSocket" in str(param.annotation) for param in sig.parameters.values()):
+                    route_info["type"] = "WebSocket"
+                else:
+                    route_info["type"] = "HTTP"
+        
+        routes.append(route_info)
+    
+    return {"total": len(routes), "routes": routes}
 
 @app.get("/api/v1/status", tags=["System"])
 def api_status():
@@ -250,29 +270,6 @@ def api_status():
         }
     }
     
-
-@app.get("/debug/routes", tags=["System"])
-def list_routes():
-    routes = []
-    for route in app.routes:
-        route_info = {
-            "path": route.path,
-            "name": getattr(route, "name", "N/A"),
-        }
-        
-        if hasattr(route, "endpoint"):
-            if inspect.iscoroutinefunction(route.endpoint):
-                sig = inspect.signature(route.endpoint)
-                if any("WebSocket" in str(param.annotation) for param in sig.parameters.values()):
-                    route_info["type"] = "WebSocket"
-                else:
-                    route_info["type"] = "HTTP"
-        
-        routes.append(route_info)
-    
-    return {"total": len(routes), "routes": routes}
-
-
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
