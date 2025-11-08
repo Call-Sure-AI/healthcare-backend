@@ -22,10 +22,28 @@ jobs:
             cd ~/healthcare-backend
             git checkout dev
             git pull origin dev
-            docker build -t healthcare-backend-app:dev .
+            
+            # Create env file if it doesn't exist
+            if [ ! -f /tmp/prod.env ]; then
+              docker inspect healthcare-backend --format='{{range .Config.Env}}{{println .}}{{end}}' > /tmp/prod.env
+            fi
+            
+            # Only build if Dockerfile or requirements changed
+            if git diff --name-only HEAD@{1} HEAD | grep -E 'Dockerfile|requirements.txt'; then
+              echo "Dependencies changed, rebuilding..."
+              docker build -t healthcare-backend-app:dev .
+            else
+              echo "No dependency changes, using existing image..."
+              # Just tag the existing prod image as dev
+              docker tag healthcare-backend-app:latest healthcare-backend-app:dev
+            fi
+            
+            # Restart dev container
             docker stop healthcare-backend-dev || true
             docker rm healthcare-backend-dev || true
             docker run -d --name healthcare-backend-dev -p 8001:8000 --restart unless-stopped --env-file /tmp/prod.env healthcare-backend-app:dev
-            docker image prune -f
+            
             sleep 5
-            curl -f https://health.callsure.ai/api/dev/health
+            curl -f https://health.callsure.ai/api/dev/health || exit 1
+            
+            echo "✅ Dev deployment successful!"
