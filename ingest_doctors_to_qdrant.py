@@ -62,7 +62,7 @@ except Exception as e:
 # --- Qdrant Client ---
 try:
     print(f"Connecting to Qdrant at {QDRANT_HOST}:{QDRANT_PORT}...")
-    qdrant_client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+    qdrant_client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT, api_key=os.getenv("QDRANT_API_KEY"), https=False)
     # Optional: Verify connection (e.g., try listing collections)
     qdrant_client.get_collections()
     print("✓ Connected to Qdrant.")
