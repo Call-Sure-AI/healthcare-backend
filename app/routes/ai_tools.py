@@ -17,7 +17,7 @@ import re
 import json
 
 try:
-    qdrant_client = QdrantClient(host=voice_config.QDRANT_HOST, port=voice_config.QDRANT_PORT)
+    qdrant_client = QdrantClient(host=voice_config.QDRANT_HOST, port=voice_config.QDRANT_PORT, api_key=voice_config.QDRANT_API_KEY, https=False)
     print(f"Connected to Qdrant at {voice_config.QDRANT_HOST}:{voice_config.QDRANT_PORT}")
 except Exception as e:
     print(f"Failed to connect to Qdrant: {e}")

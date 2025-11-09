@@ -30,6 +30,7 @@ class VoiceAgentConfig:
     QDRANT_HOST = os.getenv("QDRANT_HOST")
     QDRANT_PORT = int(os.getenv("QDRANT_PORT", 6333))
     QDRANT_COLLECTION_NAME = os.getenv("QDRANT_COLLECTION_NAME")
+    QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
     EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME")
 
     VOICE_AGENT_ENABLED = os.getenv("VOICE_AGENT_ENABLED").lower() == "true"
