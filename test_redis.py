@@ -6,7 +6,7 @@ try:
     # 1. Corrected the 'host' parameter
     # 2. Added the required 'password' parameter
     r = redis.Redis(
-        host='43.204.233.46',
+        host='65.2.153.63',
         port=6379,
         password="CallsureAIRedis@2024",
         db=0,
