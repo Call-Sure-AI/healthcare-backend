@@ -35,6 +35,14 @@ except Exception as e:
     print(f"Failed to set up OpenAI embedding model: {e}")
     VECTOR_SIZE = 0
 
+def get_openai_embedding(query: str, model=OPENAI_EMBEDDING_MODEL_NAME) -> list:
+    try:
+        response = openai.embeddings.create(input=[query], model=model)
+        return response.data[0].embedding
+    except Exception as e:
+        print(f"Error getting OpenAI embedding: {e}")
+        return None
+
 qdrant_search_schema = {
     "name": "search_doctor_information",
     "description": "Searches for doctor profiles based on specialization, name, symptoms mentioned, or other descriptive queries. Use this for general information retrieval about doctors.",
@@ -156,7 +164,11 @@ def search_doctor_information(query: str, top_k: int = 3) -> List[Dict[str, Any]
         print(f"Error: {error_msg}")
         return [{"success": False, "error": error_msg}]
     try:
-        query_vector = embedding_model.encode([query])[0].tolist()
+        query_vector = get_openai_embedding(query)
+        if query_vector is None:
+            error_msg = "Failed to obtain embedding from OpenAI."
+            print(f"Error: {error_msg}")
+            return {"success": False, "error": error_msg}
 
         search_result = qdrant_client.search(
             collection_name=voice_config.QDRANT_COLLECTION_NAME,
