@@ -25,26 +25,28 @@ import inspect
 import logging
 import sys
 
-# Force all logs to stdout for Docker
+# ⚡ CLEAN LOGGING CONFIGURATION
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s | %(levelname)-8s | %(name)s | %(message)s',
+    format='%(asctime)s | %(levelname)-8s | %(message)s',
+    datefmt='%H:%M:%S',
     handlers=[
-        logging.StreamHandler(sys.stdout)  # Force stdout
+        logging.StreamHandler(sys.stdout)
     ],
-    force=True  # Override any existing config
+    force=True
 )
 
+# Silence noisy loggers
+logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
+logging.getLogger('uvicorn.access').setLevel(logging.WARNING)
+logging.getLogger('httpx').setLevel(logging.WARNING)
+logging.getLogger('httpcore').setLevel(logging.WARNING)
 
-# Also configure root logger
-root_logger = logging.getLogger()
-root_logger.setLevel(logging.INFO)
+# Get our application logger
+logger = logging.getLogger(__name__)
+
 Base.metadata.create_all(bind=engine)
 
-# Ensure all loggers use stdout
-for handler in root_logger.handlers:
-    handler.setStream(sys.stdout)
-    
 app = FastAPI(
     title="Healthcare Appointment Booking System",
     description="""
@@ -116,14 +118,9 @@ app.add_middleware(
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    print(f"Request path: {request.url.path}")
-    print(f"Request headers: {dict(request.headers)}")
-    print(f"Request client: {request.client}")
-    
-    if "upgrade" in request.headers.get("connection", "").lower():
-        print("WebSocket upgrade detected!")
-        print(f"Origin header: {request.headers.get('origin', 'NO ORIGIN')}")
-        print(f"Host header: {request.headers.get('host', 'NO HOST')}")
+    # Only log important endpoints
+    if request.url.path.startswith("/api/v1/voice"):
+        logger.info(f"🔌 {request.method} {request.url.path}")
     
     response = await call_next(request)
     return response

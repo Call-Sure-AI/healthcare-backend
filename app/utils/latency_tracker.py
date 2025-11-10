@@ -1,4 +1,4 @@
-# app/utils/latency_tracker.py
+# app/utils/latency_tracker.py - CLEAN VERSION
 
 import time
 import logging
@@ -7,7 +7,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 import json
 
-logger = logging.getLogger(__name__)
+# Use clean logger
+logger = logging.getLogger("latency")
 
 @dataclass
 class LatencyMetrics:
@@ -26,12 +27,12 @@ class LatencyMetrics:
     llm_first_response: Optional[float] = None
     llm_complete: Optional[float] = None
     
-    # Tool execution timings (if applicable)
+    # Tool execution timings
     tool_execution_start: Optional[float] = None
     tool_execution_end: Optional[float] = None
     tool_name: Optional[str] = None
     
-    # Second LLM call (if tool was used)
+    # Second LLM call
     llm2_request_start: Optional[float] = None
     llm2_complete: Optional[float] = None
     
@@ -51,106 +52,93 @@ class LatencyMetrics:
     interaction_complete: Optional[float] = None
     
     def calculate_metrics(self) -> Dict[str, float]:
-        """Calculate derived latency metrics"""
+        """Calculate derived latency metrics in milliseconds"""
         metrics = {}
         
+        # STT latency
         if self.speech_ended_at and self.transcript_received_at:
-            metrics["stt_latency"] = round((self.transcript_received_at - self.speech_ended_at) * 1000, 2)
+            metrics["stt_latency"] = round((self.transcript_received_at - self.speech_ended_at) * 1000, 0)
         
-        if self.transcript_received_at and self.llm_first_response:
-            metrics["llm_time_to_first_token"] = round((self.llm_first_response - self.transcript_received_at) * 1000, 2)
+        # LLM latency
+        if self.llm_request_start and self.llm_first_response:
+            metrics["llm_first_token"] = round((self.llm_first_response - self.llm_request_start) * 1000, 0)
         
         if self.llm_request_start and self.llm_complete:
-            metrics["llm_total_time"] = round((self.llm_complete - self.llm_request_start) * 1000, 2)
+            metrics["llm_total"] = round((self.llm_complete - self.llm_request_start) * 1000, 0)
         
+        # Tool execution
         if self.tool_execution_start and self.tool_execution_end:
-            metrics["tool_execution_time"] = round((self.tool_execution_end - self.tool_execution_start) * 1000, 2)
+            metrics["tool_time"] = round((self.tool_execution_end - self.tool_execution_start) * 1000, 0)
         
+        # Second LLM (after tool)
         if self.llm2_request_start and self.llm2_complete:
-            metrics["llm2_total_time"] = round((self.llm2_complete - self.llm2_request_start) * 1000, 2)
+            metrics["llm2_total"] = round((self.llm2_complete - self.llm2_request_start) * 1000, 0)
         
+        # TTS latency
         if self.tts_request_start and self.tts_first_chunk:
-            metrics["tts_time_to_first_chunk"] = round((self.tts_first_chunk - self.tts_request_start) * 1000, 2)
+            metrics["tts_first_chunk"] = round((self.tts_first_chunk - self.tts_request_start) * 1000, 0)
         
         if self.tts_request_start and self.tts_complete:
-            metrics["tts_total_time"] = round((self.tts_complete - self.tts_request_start) * 1000, 2)
+            metrics["tts_total"] = round((self.tts_complete - self.tts_request_start) * 1000, 0)
         
-        if self.tts_first_chunk and self.first_audio_sent:
-            metrics["audio_buffer_delay"] = round((self.first_audio_sent - self.tts_first_chunk) * 1000, 2)
-        
-        # CRITICAL METRIC: Time from user stops speaking to first audio plays
+        # ⚡ CRITICAL METRIC: Time from user stops speaking to first audio
         if self.speech_ended_at and self.first_audio_sent:
-            metrics["time_to_first_audio_ms"] = round((self.first_audio_sent - self.speech_ended_at) * 1000, 2)
+            metrics["time_to_first_audio"] = round((self.first_audio_sent - self.speech_ended_at) * 1000, 0)
         
-        # CRITICAL METRIC: Total interaction time
+        # Total interaction time
         if self.speech_ended_at and self.interaction_complete:
-            metrics["total_interaction_time_ms"] = round((self.interaction_complete - self.speech_ended_at) * 1000, 2)
+            metrics["total_time"] = round((self.interaction_complete - self.speech_ended_at) * 1000, 0)
         
-        # Audio streaming metrics
+        # Audio streaming
         if self.first_audio_sent and self.last_audio_sent:
-            metrics["audio_streaming_duration_ms"] = round((self.last_audio_sent - self.first_audio_sent) * 1000, 2)
+            metrics["audio_duration"] = round((self.last_audio_sent - self.first_audio_sent) * 1000, 0)
         
-        metrics["tts_chunks_generated"] = self.tts_chunks_count
-        metrics["audio_frames_sent"] = self.audio_frames_sent
-        metrics["total_audio_kb"] = round(self.total_audio_bytes / 1024, 2)
+        metrics["tts_chunks"] = self.tts_chunks_count
+        metrics["audio_frames"] = self.audio_frames_sent
+        metrics["audio_kb"] = round(self.total_audio_bytes / 1024, 1)
         
         return metrics
     
     def log_summary(self):
-        """Log a comprehensive summary of all latencies"""
+        """Log a CLEAN, READABLE summary"""
         metrics = self.calculate_metrics()
         
+        # Build a clean, single-line summary for the most important metrics
+        ttfa = metrics.get("time_to_first_audio", "N/A")
+        total = metrics.get("total_time", "N/A")
+        
         logger.info("=" * 100)
-        logger.info(f"📊 LATENCY REPORT - Call: {self.call_sid} | Interaction: {self.interaction_id}")
+        logger.info(f"📊 LATENCY SUMMARY")
+        logger.info(f"   Call: {self.call_sid[-8:]}")  # Last 8 chars only
+        logger.info(f"   Interaction: {self.interaction_id[:8]}")  # First 8 chars only
         logger.info("=" * 100)
         
-        # Critical user-facing metrics
-        if "time_to_first_audio_ms" in metrics:
-            logger.info(f"⚡ TIME TO FIRST AUDIO: {metrics['time_to_first_audio_ms']}ms")
-        
-        if "total_interaction_time_ms" in metrics:
-            logger.info(f"⏱️  TOTAL INTERACTION: {metrics['total_interaction_time_ms']}ms")
-        
+        # Critical metrics first
+        logger.info(f"⚡ TIME TO FIRST AUDIO: {ttfa}ms")
+        logger.info(f"⏱️  TOTAL INTERACTION: {total}ms")
         logger.info("-" * 100)
         
         # Detailed breakdown
-        logger.info("🔍 DETAILED BREAKDOWN:")
+        if "llm_total" in metrics:
+            logger.info(f"   LLM: {metrics['llm_total']}ms")
         
-        if "stt_latency" in metrics:
-            logger.info(f"   STT (Speech-to-Text): {metrics['stt_latency']}ms")
+        if self.tool_name and "tool_time" in metrics:
+            logger.info(f"   Tool ({self.tool_name}): {metrics['tool_time']}ms")
         
-        if "llm_time_to_first_token" in metrics:
-            logger.info(f"   LLM Time to First Token: {metrics['llm_time_to_first_token']}ms")
+        if "llm2_total" in metrics:
+            logger.info(f"   LLM (after tool): {metrics['llm2_total']}ms")
         
-        if "llm_total_time" in metrics:
-            logger.info(f"   LLM Total Processing: {metrics['llm_total_time']}ms")
+        if "tts_first_chunk" in metrics:
+            logger.info(f"   TTS first chunk: {metrics['tts_first_chunk']}ms")
         
-        if self.tool_name and "tool_execution_time" in metrics:
-            logger.info(f"   Tool Execution ({self.tool_name}): {metrics['tool_execution_time']}ms")
+        if "tts_total" in metrics:
+            logger.info(f"   TTS complete: {metrics['tts_total']}ms")
         
-        if "llm2_total_time" in metrics:
-            logger.info(f"   LLM Second Call: {metrics['llm2_total_time']}ms")
-        
-        if "tts_time_to_first_chunk" in metrics:
-            logger.info(f"   TTS Time to First Chunk: {metrics['tts_time_to_first_chunk']}ms")
-        
-        if "tts_total_time" in metrics:
-            logger.info(f"   TTS Total Generation: {metrics['tts_total_time']}ms")
-        
-        if "audio_buffer_delay" in metrics:
-            logger.info(f"   Audio Buffer Delay: {metrics['audio_buffer_delay']}ms")
-        
-        if "audio_streaming_duration_ms" in metrics:
-            logger.info(f"   Audio Streaming Duration: {metrics['audio_streaming_duration_ms']}ms")
+        if "audio_duration" in metrics:
+            logger.info(f"   Audio streaming: {metrics['audio_duration']}ms")
         
         logger.info("-" * 100)
-        
-        # Audio metrics
-        logger.info(f"📦 AUDIO METRICS:")
-        logger.info(f"   TTS Chunks: {metrics.get('tts_chunks_generated', 0)}")
-        logger.info(f"   Audio Frames: {metrics.get('audio_frames_sent', 0)}")
-        logger.info(f"   Total Audio Size: {metrics.get('total_audio_kb', 0)} KB")
-        
+        logger.info(f"   Audio: {metrics.get('tts_chunks', 0)} chunks, {metrics.get('audio_kb', 0)} KB")
         logger.info("=" * 100)
         
         return metrics
@@ -163,21 +151,12 @@ class LatencyMetrics:
             "interaction_id": self.interaction_id,
             "timestamp": self.timestamp.isoformat(),
             "tool_used": self.tool_name,
-            "metrics": metrics,
-            "raw_timings": {
-                "speech_ended_at": self.speech_ended_at,
-                "transcript_received_at": self.transcript_received_at,
-                "llm_request_start": self.llm_request_start,
-                "llm_complete": self.llm_complete,
-                "tts_first_chunk": self.tts_first_chunk,
-                "first_audio_sent": self.first_audio_sent,
-                "interaction_complete": self.interaction_complete,
-            }
+            "metrics": metrics
         }
 
 
 class LatencyTracker:
-    """Global latency tracker for all calls"""
+    """Global latency tracker"""
     
     def __init__(self):
         self.active_metrics: Dict[str, LatencyMetrics] = {}
@@ -194,12 +173,12 @@ class LatencyTracker:
         return self.active_metrics.get(interaction_id)
     
     def complete_interaction(self, interaction_id: str):
-        """Mark interaction as complete and store metrics"""
+        """Mark interaction as complete and log summary"""
         if interaction_id in self.active_metrics:
             metrics = self.active_metrics[interaction_id]
             metrics.interaction_complete = time.time()
             
-            # Log summary
+            # Log clean summary
             calculated_metrics = metrics.log_summary()
             
             # Store for analytics
@@ -218,17 +197,19 @@ class LatencyTracker:
         if not session_metrics:
             return {}
         
-        # Calculate averages
-        ttfa_values = [m["metrics"].get("time_to_first_audio_ms") for m in session_metrics if "time_to_first_audio_ms" in m["metrics"]]
+        ttfa_values = [m["metrics"].get("time_to_first_audio") for m in session_metrics if "time_to_first_audio" in m["metrics"]]
         
-        stats = {
-            "total_interactions": len(session_metrics),
-            "avg_time_to_first_audio_ms": round(sum(ttfa_values) / len(ttfa_values), 2) if ttfa_values else None,
-            "min_time_to_first_audio_ms": round(min(ttfa_values), 2) if ttfa_values else None,
-            "max_time_to_first_audio_ms": round(max(ttfa_values), 2) if ttfa_values else None,
-        }
+        if ttfa_values:
+            stats = {
+                "total_interactions": len(session_metrics),
+                "avg_ttfa_ms": round(sum(ttfa_values) / len(ttfa_values), 0),
+                "min_ttfa_ms": round(min(ttfa_values), 0),
+                "max_ttfa_ms": round(max(ttfa_values), 0),
+            }
+            logger.info(f"📈 SESSION STATS: {stats}")
+            return stats
         
-        return stats
+        return {}
 
 
 # Global instance

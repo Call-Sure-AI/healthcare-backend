@@ -22,8 +22,9 @@ import time
 from starlette.websockets import WebSocketState
 from app.utils.latency_tracker import latency_tracker
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# logging.basicConfig(level=logging.INFO)
+# Use clean logger
+logger = logging.getLogger("voice")
 
 router = APIRouter(prefix="/voice", tags=["Voice Agent"])
 
@@ -36,112 +37,82 @@ async def handle_full_transcript(
     tts_service: any
 ):
     """
-    ⚡ OPTIMIZED: Stream audio chunks immediately with full latency tracking
+    ⚡ OPTIMIZED with CLEAN logging
     """
     # Start tracking
-    interaction_id = str(uuid.uuid4())
+    interaction_id = str(uuid.uuid4())[:8]  # Short ID
     metrics = latency_tracker.start_interaction(call_sid, interaction_id)
     metrics.transcript_received_at = time.time()
     
-    logger.info("=" * 80)
-    logger.info(f"📝 TRANSCRIPT | Interaction: {interaction_id}")
-    logger.info(f"Call: {call_sid}")
-    logger.info(f"User: '{transcript}'")
-    logger.info("=" * 80)
+    # Clean, single-line log
+    logger.info(f"📝 USER: '{transcript}'")
     
     context = call_context.get(call_sid)
-    if not context:
-        logger.error("❌ No context found")
-        return
-    
-    if not transcript or not transcript.strip():
-        logger.warning("⚠️ Empty transcript")
+    if not context or not transcript.strip():
         return
     
     agent: VoiceAgentService = context.get("agent")
     if not agent:
-        logger.error("❌ No agent in context")
         return
     
     try:
-        # AI Processing with latency tracking
-        logger.info("🤖 Processing with AI...")
-        ai_start = time.time()
-        
+        # AI Processing
         ai_result = await agent.process_user_speech(call_sid, transcript, metrics)
-        
-        ai_duration = time.time() - ai_start
-        logger.info(f"⏱️ AI Processing: {ai_duration*1000:.0f}ms")
         
         response_text = ai_result.get("response")
         if not response_text:
-            logger.warning("⚠️ No response, using fallback")
             response_text = "I'm sorry, could you please repeat that?"
         
-        logger.info(f"💬 Response: '{response_text[:80]}...'")
+        logger.info(f"💬 AI: '{response_text[:100]}{'...' if len(response_text) > 100 else ''}'")
 
         # TTS Generation with streaming
-        logger.info("🎤 Starting TTS streaming...")
         metrics.tts_request_start = time.time()
-        
-        # Clear Twilio buffer
         await stream_service.clear()
 
         chunk_count = 0
         
-        # ⚡ STREAM CHUNKS IMMEDIATELY - NO BUFFERING
+        # Stream chunks immediately
         async for audio_b64 in tts_service.generate(response_text):
             if audio_b64:
-                # Track first chunk
                 if chunk_count == 0:
                     metrics.tts_first_chunk = time.time()
                     ttfa = (metrics.tts_first_chunk - metrics.transcript_received_at) * 1000
-                    logger.info(f"⚡ FIRST AUDIO CHUNK: {ttfa:.0f}ms from transcript")
+                    logger.info(f"⚡ First audio in {ttfa:.0f}ms")
                 
                 chunk_count += 1
                 metrics.tts_chunks_count = chunk_count
-                
-                # Send immediately (with tracking)
                 await stream_service.send_audio_chunk(audio_b64, metrics)
         
         metrics.tts_complete = time.time()
         
         if chunk_count == 0:
-            logger.error("❌ No audio generated!")
+            logger.error("❌ No audio generated")
             return
         
-        logger.info(f"✓ Streamed {chunk_count} TTS chunks")
-        
-        # Complete interaction tracking and log summary
-        calculated_metrics = latency_tracker.complete_interaction(interaction_id)
-        
-        # Log simplified summary
-        if calculated_metrics:
-            ttfa = calculated_metrics.get("time_to_first_audio_ms", 0)
-            total = calculated_metrics.get("total_interaction_time_ms", 0)
-            logger.info(f"📊 LATENCY: TTFA={ttfa:.0f}ms | Total={total:.0f}ms")
+        # Complete tracking (this logs the full summary)
+        latency_tracker.complete_interaction(interaction_id)
         
     except Exception as e:
         logger.error(f"❌ Error: {e}")
-        traceback.print_exc()
+        traceback.print_exc()  # Add full traceback for debugging
         
-        # Still complete tracking
         try:
             latency_tracker.complete_interaction(interaction_id)
         except:
             pass
 
-        # Error recovery
+        # ✅ YES - KEEP THIS ERROR RECOVERY CODE
+        # It ensures the user gets a response even if something fails
         try:
             error_msg = "I apologize, I'm having trouble. Could you try again?"
             logger.info("🔧 Sending error message...")
-            
+
             async for audio_b64 in tts_service.generate(error_msg):
                 if audio_b64:
                     await stream_service.send_audio_chunk(audio_b64, None)
-                        
+
             logger.info("✓ Error message sent")
-                
+
         except Exception as err:
             logger.error(f"❌ Error recovery failed: {err}")
 

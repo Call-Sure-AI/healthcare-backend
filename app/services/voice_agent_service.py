@@ -17,7 +17,9 @@ import traceback
 import json
 import time
 
-logger = logging.getLogger(__name__)
+import logging
+
+logger = logging.getLogger("agent")
 
 class VoiceAgentService:
     def __init__(self, db: Session):
@@ -67,24 +69,17 @@ class VoiceAgentService:
         self, 
         call_sid: str, 
         user_text: str,
-        metrics: 'LatencyMetrics' = None  # ADD THIS
+        metrics: 'LatencyMetrics' = None
     ) -> Dict[str, Any]:
-        start_time = time.time()
-        logger.info(f"Processing: '{user_text}'")
 
         try:
             redis_service.append_to_conversation(call_sid, "user", user_text)
             session = redis_service.get_session(call_sid)
             
             if not session:
-                return {
-                    "success": False,
-                    "response": "Session not found."
-                }
+                return {"success": False, "response": "Session not found."}
             
             conversation_history = session.get("conversation_history", [])
-            
-            # LLM Request with timing
             ai_functions_schema = get_ai_functions()
             
             if metrics:
@@ -98,14 +93,11 @@ class VoiceAgentService:
             
             if metrics:
                 metrics.llm_first_response = time.time()
-                llm_latency = (metrics.llm_first_response - metrics.llm_request_start) * 1000
-                logger.info(f"⏱️ LLM: {llm_latency:.0f}ms")
+                llm_ms = (metrics.llm_first_response - metrics.llm_request_start) * 1000
+                logger.info(f"   LLM: {llm_ms:.0f}ms")
             
             if not first_response:
-                return {
-                    "success": False,
-                    "response": "I'm having trouble understanding."
-                }
+                return {"success": False, "response": "I'm having trouble understanding."}
 
             # Handle function call
             if first_response.get("function_call"):
@@ -114,13 +106,13 @@ class VoiceAgentService:
                 function_args = function_call["arguments"]
                 tool_call_id = function_call["id"]
 
-                logger.info(f"🔧 Calling tool: {function_name}")
+                logger.info(f"   🔧 Tool: {function_name}")
                 
                 if metrics:
                     metrics.tool_name = function_name
                     metrics.tool_execution_start = time.time()
                 
-                # Save tool call message
+                # Tool call message
                 tool_call_message = {
                     "role": "assistant",
                     "content": None,
@@ -135,15 +127,15 @@ class VoiceAgentService:
                 }
                 redis_service.append_to_conversation(call_sid, "assistant", tool_call_message)
                 
-                # Execute function
+                # Execute
                 function_result = self.ai_tools.execute_function(function_name, function_args)
                 
                 if metrics:
                     metrics.tool_execution_end = time.time()
-                    tool_latency = (metrics.tool_execution_end - metrics.tool_execution_start) * 1000
-                    logger.info(f"⏱️ Tool: {tool_latency:.0f}ms")
+                    tool_ms = (metrics.tool_execution_end - metrics.tool_execution_start) * 1000
+                    logger.info(f"   Tool exec: {tool_ms:.0f}ms")
                 
-                # Save tool result
+                # Tool result message
                 tool_result_message = {
                     "tool_call_id": tool_call_id,
                     "role": "tool",
@@ -165,8 +157,8 @@ class VoiceAgentService:
                 
                 if metrics:
                     metrics.llm2_complete = time.time()
-                    llm2_latency = (metrics.llm2_complete - metrics.llm2_request_start) * 1000
-                    logger.info(f"⏱️ LLM2: {llm2_latency:.0f}ms")
+                    llm2_ms = (metrics.llm2_complete - metrics.llm2_request_start) * 1000
+                    logger.info(f"   LLM2: {llm2_ms:.0f}ms")
                 
                 if final_response and final_response.choices:
                     response_text = final_response.choices[0].message.content
@@ -180,9 +172,6 @@ class VoiceAgentService:
                 if metrics:
                     metrics.llm_complete = time.time()
                 
-                total_time = time.time() - start_time
-                logger.info(f"⏱️ TOTAL (with tool): {total_time*1000:.0f}ms")
-                
                 return {
                     "success": success,
                     "response": response_text,
@@ -193,17 +182,11 @@ class VoiceAgentService:
             
             else:
                 # Direct response
-                response_text = first_response.get("response")
-                if not response_text:
-                    response_text = "I'm sorry, I didn't quite understand. Could you rephrase?"
-                
+                response_text = first_response.get("response") or "I'm sorry, I didn't quite understand."
                 redis_service.append_to_conversation(call_sid, "assistant", response_text)
                 
                 if metrics:
                     metrics.llm_complete = time.time()
-                
-                total_time = time.time() - start_time
-                logger.info(f"⏱️ TOTAL (direct): {total_time*1000:.0f}ms")
                 
                 return {
                     "success": True,
@@ -213,18 +196,14 @@ class VoiceAgentService:
 
         except Exception as e:
             logger.error(f"❌ Error: {e}", exc_info=True)
-            fallback = "I apologize, I encountered an error. Please try again."
+            fallback = "I apologize, I encountered an error."
             
             try:
                 redis_service.append_to_conversation(call_sid, "assistant", fallback)
             except:
                 pass
             
-            return {
-                "success": False,
-                "error": str(e),
-                "response": fallback
-            }
+            return {"success": False, "error": str(e), "response": fallback}
 
     def _generate_fallback_response(self, function_name: str, result: Dict[str, Any]) -> str:
         """Generates a simple text response if the second LLM call fails after a tool call."""
