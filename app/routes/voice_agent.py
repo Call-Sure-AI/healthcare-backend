@@ -34,14 +34,20 @@ async def handle_full_transcript(
     call_sid: str,
     transcript: str,
     stream_service: StreamService,
-    tts_service: any
+    tts_service: any,
+    speech_end_time: float = None  # ⚡ ADD THIS PARAMETER
 ):
     """
-    ⚡ OPTIMIZED with CLEAN logging
+    ⚡ OPTIMIZED with CLEAN logging and accurate TTFA tracking
     """
     # Start tracking
     interaction_id = str(uuid.uuid4())[:8]  # Short ID
     metrics = latency_tracker.start_interaction(call_sid, interaction_id)
+
+    # ⚡ FIX: Set speech_ended_at from Deepgram
+    if speech_end_time:
+        metrics.speech_ended_at = speech_end_time
+    
     metrics.transcript_received_at = time.time()
     
     # Clean, single-line log
@@ -283,8 +289,8 @@ async def websocket_stream(websocket: WebSocket):
         try:
             deepgram_service = deepgram_manager.create_connection(
                 call_sid=call_sid,
-                on_speech_end_callback=lambda transcript: asyncio.create_task(
-                    handle_full_transcript(call_sid, transcript, stream_service, tts_service)
+                on_speech_end_callback=lambda transcript, speech_end_time: asyncio.create_task(
+                    handle_full_transcript(call_sid, transcript, stream_service, tts_service, speech_end_time)
                 )
             )
 
