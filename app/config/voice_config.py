@@ -64,12 +64,12 @@ class VoiceAgentConfig:
     def validate_config(cls) -> bool:
         """Validate required configuration"""
         required_vars = [
-            ("TWILIO_ACCOUNT_SID", TWILIO_ACCOUNT_SID),
-            ("TWILIO_AUTH_TOKEN", TWILIO_AUTH_TOKEN),
-            ("TWILIO_PHONE_NUMBER", TWILIO_PHONE_NUMBER),
-            ("OPENAI_API_KEY", OPENAI_API_KEY),
-            ("ELEVENLABS_API_KEY", ELEVENLABS_API_KEY),
-            ("DEEPGRAM_API_KEY", DEEPGRAM_API_KEY),
+            ("TWILIO_ACCOUNT_SID", cls.TWILIO_ACCOUNT_SID),
+            ("TWILIO_AUTH_TOKEN", cls.TWILIO_AUTH_TOKEN),
+            ("TWILIO_PHONE_NUMBER", cls.TWILIO_PHONE_NUMBER),
+            ("OPENAI_API_KEY", cls.OPENAI_API_KEY),
+            ("ELEVENLABS_API_KEY", cls.ELEVENLABS_API_KEY),
+            ("DEEPGRAM_API_KEY", cls.DEEPGRAM_API_KEY),
         ]
         
         missing = [name for name, value in required_vars if not value]
