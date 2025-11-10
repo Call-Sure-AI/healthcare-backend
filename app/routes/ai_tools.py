@@ -16,6 +16,7 @@ import traceback
 import re
 import json
 import openai
+import os
 
 try:
     qdrant_client = QdrantClient(host=voice_config.QDRANT_HOST, port=voice_config.QDRANT_PORT, api_key=voice_config.QDRANT_API_KEY, https=False)
