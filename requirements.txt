@@ -17,4 +17,3 @@ elevenlabs==2.19.0
 deepgram-sdk==3.7.2
 aiohttp
 qdrant-client
-sentence-transformers

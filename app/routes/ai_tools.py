@@ -7,7 +7,6 @@ from app.models.leave import DoctorLeave
 from app.utils.symptom_mapper import extract_specialization_from_text, filter_doctors_by_specialization
 from app.schemas.appointment import AppointmentCreate
 from qdrant_client import QdrantClient, models
-from sentence_transformers import SentenceTransformer
 from app.config.voice_config import voice_config
 import re
 from fastapi import HTTPException
