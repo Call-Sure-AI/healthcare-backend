@@ -127,6 +127,8 @@ async def handle_incoming_call(
     try:
         logger.info("\n" + "=" * 80)
         logger.info(f"Incoming call: {CallSid} from {From}")
+        logger.info(f"Request URL: {request.url}")
+        logger.info(f"Request path: {request.url.path}")
         
         response = VoiceResponse()
         
@@ -135,8 +137,20 @@ async def handle_incoming_call(
             response.hangup()
             return Response(content=str(response), media_type="application/xml")
         
-        # WebSocket URL
-        websocket_url = f"wss://{request.url.hostname}/api/v1/voice/stream?call_sid={CallSid}"
+        # ⚡ DETECT ENVIRONMENT from X-Forwarded-Prefix header or path
+        forwarded_prefix = request.headers.get("x-forwarded-prefix", "")
+        request_path = request.url.path
+        
+        # Determine if this is dev or prod based on the incoming path/prefix
+        if "/api/dev/" in forwarded_prefix or "/api/dev/" in request_path:
+            # Development environment
+            websocket_url = f"wss://{request.url.hostname}/api/dev/v1/voice/stream?call_sid={CallSid}"
+            logger.info("🔧 Environment: DEVELOPMENT")
+        else:
+            # Production environment
+            websocket_url = f"wss://{request.url.hostname}/api/v1/voice/stream?call_sid={CallSid}"
+            logger.info("🏭 Environment: PRODUCTION")
+        
         logger.info(f"🔌 WebSocket URL: {websocket_url}")
         
         # Connect to WebSocket stream
