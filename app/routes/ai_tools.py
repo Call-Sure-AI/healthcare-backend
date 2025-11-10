@@ -6,13 +6,65 @@ from app.services.appointment_service import AppointmentService
 from app.models.leave import DoctorLeave
 from app.utils.symptom_mapper import extract_specialization_from_text, filter_doctors_by_specialization
 from app.schemas.appointment import AppointmentCreate
+from qdrant_client import QdrantClient, models
+from app.config.voice_config import voice_config
 import re
 from fastapi import HTTPException
 from collections import Counter
 import traceback
 import re
+import json
+import openai
+import os
+
+try:
+    qdrant_client = QdrantClient(host=voice_config.QDRANT_HOST, port=voice_config.QDRANT_PORT, api_key=voice_config.QDRANT_API_KEY, https=False)
+    print(f"Connected to Qdrant at {voice_config.QDRANT_HOST}:{voice_config.QDRANT_PORT}")
+except Exception as e:
+    print(f"Failed to connect to Qdrant: {e}")
+    qdrant_client = None
+
+OPENAI_API_KEY = getattr(voice_config, "OPENAI_API_KEY", os.getenv("OPENAI_API_KEY"))
+OPENAI_EMBEDDING_MODEL_NAME = getattr(voice_config, "EMBEDDING_MODEL_NAME", os.getenv("EMBEDDING_MODEL_NAME"))
+openai.api_key = OPENAI_API_KEY
+
+try:
+    VECTOR_SIZE = 1536
+    print(f"Loaded OpenAI embedding model: {OPENAI_EMBEDDING_MODEL_NAME}")
+except Exception as e:
+    print(f"Failed to set up OpenAI embedding model: {e}")
+    VECTOR_SIZE = 0
+
+def get_openai_embedding(query: str, model=OPENAI_EMBEDDING_MODEL_NAME) -> list:
+    try:
+        response = openai.embeddings.create(input=[query], model=model)
+        return response.data[0].embedding
+    except Exception as e:
+        print(f"Error getting OpenAI embedding: {e}")
+        return None
+
+qdrant_search_schema = {
+    "name": "search_doctor_information",
+    "description": "Searches for doctor profiles based on specialization, name, symptoms mentioned, or other descriptive queries. Use this for general information retrieval about doctors.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "The search query (e.g., 'neurology specialist', 'doctor vance details', 'heart doctor available', 'doctor for chest pain')",
+            },
+            "top_k": {
+                "type": "integer",
+                "description": "Number of results to return",
+                "default": 3
+            }
+        },
+        "required": ["query"],
+    },
+}
 
 AI_FUNCTIONS = [
+    qdrant_search_schema,
     {
         "name": "get_available_doctors",
         "description": (
@@ -104,34 +156,84 @@ AI_FUNCTIONS = [
 ]
 
 
+def search_doctor_information(query: str, top_k: int = 3) -> List[Dict[str, Any]]:
+    print(f"\n--- Executing Qdrant Search ---")
+    print(f"Query: '{query}', Top K: {top_k}")
+    if not qdrant_client or not embedding_model:
+        error_msg = "Qdrant client or embedding model not initialized."
+        print(f"Error: {error_msg}")
+        return [{"success": False, "error": error_msg}]
+    try:
+        query_vector = get_openai_embedding(query)
+        if query_vector is None:
+            error_msg = "Failed to obtain embedding from OpenAI."
+            print(f"Error: {error_msg}")
+            return {"success": False, "error": error_msg}
+
+        search_result = qdrant_client.search(
+            collection_name=voice_config.QDRANT_COLLECTION_NAME,
+            query_vector=query_vector,
+            limit=top_k,
+            with_payload=True
+        )
+
+        results = [hit.payload for hit in search_result]
+        print(f"Qdrant returned {len(results)} results.")
+        print(f"--- Qdrant Search Complete ---\n")
+        return {"success": True, "results": results}
+    except Exception as e:
+        error_msg = f"Error during Qdrant search: {e}"
+        print(f"Error: {error_msg}")
+        traceback.print_exc()
+        return {"success": False, "error": error_msg, "results": []}
+
 class AIToolsExecutor:
     """Executor for AI function calls"""
     
     def __init__(self, db: Session):
         self.db = db
+        self.functions = {
+            "get_available_doctors": self.get_available_doctors,
+            "get_available_slots": self.get_available_slots,
+            "book_appointment_in_hour_range": self.book_appointment_in_hour_range,
+            "get_doctor_schedule": self.get_doctor_schedule,
+            "get_appointment_details": self.get_appointment_details,
+            "search_doctor_information": search_doctor_information # Add this mapping
+        }
     
     def execute_function(self, function_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute a function called by GPT-4"""
         try:
-            print(f"Executing function: {function_name}")
-            
-            if function_name == "get_available_doctors":
-                return self.get_available_doctors(**arguments)
-            elif function_name == "get_available_slots":
-                return self.get_available_slots(**arguments)
-            elif function_name == "book_appointment_in_hour_range":
-                return self.book_appointment_in_hour_range(**arguments)
-            elif function_name == "get_doctor_schedule":
-                return self.get_doctor_schedule(**arguments)
-            elif function_name == "get_appointment_details":
-                return self.get_appointment_details(**arguments)
+            print(f"\n--- Attempting to execute function: {function_name} ---")
+            print(f"Arguments received: {arguments}")
+
+            if function_name in self.functions:
+                func_to_call = self.functions[function_name]
+                is_method = hasattr(func_to_call, '__self__') and func_to_call.__self__ is self
+
+                if is_method:
+                    print(f"Executing '{function_name}' as instance method.")
+                    result = func_to_call(**arguments)
+                else:
+                    print(f"Executing '{function_name}' as standalone function.")
+                    result = func_to_call(**arguments)
+
+                print(f"--- Function '{function_name}' execution finished ---")
+                if isinstance(result, dict) and 'success' in result:
+                    return result
+                elif isinstance(result, dict):
+                    result['success'] = True
+                    return result
+                else:
+                    return {"success": True, "result": result}
+
             else:
+                print(f"Error: Unknown function name '{function_name}'")
                 return {"success": False, "error": f"Unknown function: {function_name}"}
         except Exception as e:
-            print(f"Function execution error: {e}")
+            print(f"Function execution error in '{function_name}': {e}")
             traceback.print_exc()
-            return {"success": False, "error": str(e)}
-    
+            return {"success": False, "error": f"Error during execution of {function_name}: {str(e)}"}
+
     def get_available_doctors(self, user_context: str) -> Dict[str, Any]:
         """Get list of active doctors who are not on leave, filtered by symptoms/specialization"""
         try:            

@@ -4,7 +4,9 @@ from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
 from app.config.redis_config import get_redis_client
 from app.config.voice_config import voice_config
+import logging
 
+logger = logging.getLogger("rag.agent")
 
 class RedisService:
     def __init__(self):
@@ -16,6 +18,7 @@ class RedisService:
     
     def create_session(self, call_sid: str, session_data: Dict[str, Any]) -> bool:
         try:
+            logger.debug(f"[Redis] Creating session for call_sid={call_sid}")
             key = self._get_key(call_sid)
             session_data['created_at'] = datetime.now().isoformat()
             session_data['updated_at'] = datetime.now().isoformat()
@@ -33,6 +36,7 @@ class RedisService:
     
     def get_session(self, call_sid: str) -> Optional[Dict[str, Any]]:
         try:
+            logger.debug(f"[Redis] Getting session for call_sid={call_sid}")
             key = self._get_key(call_sid)
             data = self.redis_client.get(key)
             
@@ -40,11 +44,13 @@ class RedisService:
                 return json.loads(data)
             return None
         except Exception as e:
+            logger.error(f"[Redis] Error getting session for call_sid={call_sid}: {e}")
             print(f"Error getting session: {e}")
             return None
     
     def update_session(self, call_sid: str, updates: Dict[str, Any]) -> bool:
         try:
+            logger.debug(f"[Redis] Updating session {call_sid} with {update_data}")
             session = self.get_session(call_sid)
             if not session:
                 print(f"Session not found: {call_sid}")

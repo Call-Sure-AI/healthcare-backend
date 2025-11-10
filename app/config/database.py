@@ -29,8 +29,11 @@ settings = Settings()
 
 engine = create_engine(
     settings.database_url,
+    poolclass=pool.QueuePool,
+    pool_size=10,
+    max_overflow=20,
     pool_pre_ping=True,
-    pool_recycle=300,
+    pool_recycle=3600,
     echo=settings.debug
 )
 

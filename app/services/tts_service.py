@@ -8,7 +8,6 @@ from app.config.voice_config import voice_config
 
 logger = logging.getLogger(__name__)
 
-
 class TTSService:
     def __init__(self):
         self.request_queue = deque()

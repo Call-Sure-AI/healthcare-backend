@@ -3,12 +3,14 @@ import json
 from typing import Optional, List, Dict, Any
 from app.config.voice_config import voice_config
 from datetime import datetime
+from openai import AsyncOpenAI
 
 openai.api_key = voice_config.OPENAI_API_KEY
 
 
 class OpenAIService:
     def __init__(self):
+        self.client = AsyncOpenAI(api_key=voice_config.OPENAI_API_KEY)
         self.model = voice_config.OPENAI_MODEL
         self.voice = voice_config.OPENAI_VOICE
         self.system_prompt = voice_config.SYSTEM_PROMPT
@@ -58,7 +60,7 @@ class OpenAIService:
                 ]
                 params["tool_choice"] = "auto"
             
-            response = openai.chat.completions.create(**params)
+            response = await self.client.chat.completions.create(**params)
             return response
         except Exception as e:
             print(f"Chat completion error: {e}")

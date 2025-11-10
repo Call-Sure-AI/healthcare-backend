@@ -371,7 +371,7 @@ async def websocket_stream(websocket: WebSocket):
                 event = data.get("event")
                 
                 if message_count % 100 == 0:
-                    logger.info(f"Processed {message_count} messages")
+                    logger.debug(f"Processed {message_count} messages")
                 
                 if event == "connected":
                     logger.debug("Connected event")

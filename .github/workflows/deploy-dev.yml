@@ -1,0 +1,58 @@
+name: Deploy Dev Branch
+
+on:
+  push:
+    branches:
+      - dev
+
+jobs:
+  deploy-dev:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        
+      - name: Deploy to Dev Server
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.DEV_SERVER_HOST }}
+          username: ${{ secrets.DEV_SERVER_USER }}
+          key: ${{ secrets.DEV_SERVER_SSH_KEY }}
+          script: |
+            cd ~/healthcare-backend
+            git checkout dev
+            git pull origin dev
+            
+            # Create env file if missing
+            if [ ! -f /tmp/prod.env ]; then
+              docker inspect healthcare-backend --format='{{range .Config.Env}}{{println .}}{{end}}' > /tmp/prod.env
+            fi
+            
+            # Use production image for dev (same code)
+            docker tag healthcare-backend-app:latest healthcare-backend-app:dev 2>/dev/null || true
+            
+            # Restart dev container
+            docker stop healthcare-backend-dev 2>/dev/null || true
+            docker rm healthcare-backend-dev 2>/dev/null || true
+            
+            docker run -d \
+              --name healthcare-backend-dev \
+              -p 8001:8000 \
+              --restart unless-stopped \
+              --env-file /tmp/prod.env \
+              healthcare-backend-app:dev
+            
+            # Wait and check
+            echo "Waiting for container to start..."
+            sleep 10
+            
+            # Check if container is running
+            if docker ps | grep healthcare-backend-dev; then
+              echo "✅ Container is running"
+              # Try health check (don't fail if it doesn't respond yet)
+              curl -f https://health.callsure.ai/api/dev/health || echo "⚠️ Health check failed but container is running"
+            else
+              echo "❌ Container failed to start"
+              docker logs healthcare-backend-dev
+              exit 1
+            fi
