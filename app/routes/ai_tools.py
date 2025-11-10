@@ -15,6 +15,7 @@ from collections import Counter
 import traceback
 import re
 import json
+import openai
 
 try:
     qdrant_client = QdrantClient(host=voice_config.QDRANT_HOST, port=voice_config.QDRANT_PORT, api_key=voice_config.QDRANT_API_KEY, https=False)
@@ -23,13 +24,15 @@ except Exception as e:
     print(f"Failed to connect to Qdrant: {e}")
     qdrant_client = None
 
+OPENAI_API_KEY = getattr(voice_config, "OPENAI_API_KEY", os.getenv("OPENAI_API_KEY"))
+OPENAI_EMBEDDING_MODEL_NAME = getattr(voice_config, "EMBEDDING_MODEL_NAME", os.getenv("EMBEDDING_MODEL_NAME"))
+openai.api_key = OPENAI_API_KEY
+
 try:
-    embedding_model = SentenceTransformer(voice_config.EMBEDDING_MODEL_NAME)
-    print(f"Loaded embedding model: {voice_config.EMBEDDING_MODEL_NAME}")
-    VECTOR_SIZE = embedding_model.get_sentence_embedding_dimension()
+    VECTOR_SIZE = 1536
+    print(f"Loaded OpenAI embedding model: {OPENAI_EMBEDDING_MODEL_NAME}")
 except Exception as e:
-    print(f"Failed to load embedding model '{voice_config.EMBEDDING_MODEL_NAME}': {e}")
-    embedding_model = None
+    print(f"Failed to set up OpenAI embedding model: {e}")
     VECTOR_SIZE = 0
 
 qdrant_search_schema = {
