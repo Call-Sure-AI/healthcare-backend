@@ -1,3 +1,4 @@
+# app\routes\voice_agent.py
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect, Form, Query, Depends
 from fastapi.responses import Response, JSONResponse
 from sqlalchemy.orm import Session
@@ -34,102 +35,53 @@ async def handle_full_transcript(
     tts_service: any
 ):
     """
-    Callback triggered by Deepgram when user finishes speaking.
-    Combines ALL audio chunks before sending to prevent dropouts.
+    OPTIMIZED: Stream audio chunks as they arrive (no buffering)
     """
-    logger.info("=" * 80)
-    logger.info(f"TRANSCRIPT RECEIVED")
-    logger.info(f"Call SID: {call_sid}")
-    logger.info(f"User said: '{transcript}'")
-    logger.info(f"Length: {len(transcript)} chars")
+    logger.info(f"TRANSCRIPT: '{transcript}'")
     
     context = call_context.get(call_sid)
-    if not context:
-        logger.error("No context found")
-        return
-    
-    if not transcript or not transcript.strip():
-        logger.warning("Empty transcript")
+    if not context or not transcript.strip():
         return
     
     agent: VoiceAgentService = context.get("agent")
     if not agent:
-        logger.error("No agent in context")
         return
     
     try:
         ai_start = time.time()
-        logger.info("Calling VoiceAgentService.process_user_speech()...")
-        
         ai_result = await agent.process_user_speech(call_sid, transcript)
-        
-        logger.info(f"AI Processing: {time.time() - ai_start:.2f}s")
-        logger.info(f"Success: {ai_result.get('success', False)}")
+        logger.info(f"⏱️ AI Processing: {time.time() - ai_start:.3f}s")
         
         response_text = ai_result.get("response")
         if not response_text:
-            logger.warning("No response, using fallback")
             response_text = "I'm sorry, could you please repeat that?"
         
-        logger.info(f"AI Response: '{response_text[:80]}...'")
-
-        logger.info("🎤 Generating TTS audio...")
+        logger.info(f"🎤 Streaming TTS...")
         tts_start = time.time()
         
-        # Clear Twilio buffer
+        # Clear buffer ONCE
         await stream_service.clear()
-
-        audio_chunks = []
-        chunk_count = 0
         
+        chunk_count = 0
+        first_chunk_latency = None
+        
+        # ⚡ STREAM CHUNKS IMMEDIATELY - DON'T BUFFER
         async for audio_b64 in tts_service.generate(response_text):
             if audio_b64:
-                audio_chunks.append(audio_b64)
+                if chunk_count == 0:
+                    first_chunk_latency = time.time() - tts_start
+                    logger.info(f"⚡ First chunk: {first_chunk_latency:.3f}s")
+                
+                # Send immediately without combining
+                await stream_service.send_audio_chunk(audio_b64)
                 chunk_count += 1
         
-        if not audio_chunks:
-            logger.error("No audio generated!")
-            return
-        
-        logger.info(f"Generated {chunk_count} chunks from TTS")
-        
-        combined_audio_bytes = b''
-        for chunk_b64 in audio_chunks:
-            chunk_bytes = base64.b64decode(chunk_b64)
-            combined_audio_bytes += chunk_bytes
-        
-        total_size = len(combined_audio_bytes)
-        logger.info(f"Combined into single buffer: {total_size} bytes")
-
-        final_audio_b64 = base64.b64encode(combined_audio_bytes).decode('ascii')
-
-        await stream_service._send_audio(final_audio_b64)
-        
-        tts_duration = time.time() - tts_start
-        logger.info(f"✓ Audio complete: {tts_duration:.2f}s ({total_size} bytes)")
-        logger.info("=" * 80)
+        total_time = time.time() - tts_start
+        logger.info(f"✓ Streamed {chunk_count} chunks in {total_time:.3f}s")
         
     except Exception as e:
-        logger.error(f"✗ Error: {e}")
+        logger.error(f"Error: {e}")
         traceback.print_exc()
-
-        try:
-            error_msg = "I apologize, I'm having trouble. Could you try again?"
-            logger.info("🔧 Sending error message...")
-            
-            error_chunks = []
-            async for audio_b64 in tts_service.generate(error_msg):
-                if audio_b64:
-                    error_chunks.append(audio_b64)
-            
-            if error_chunks:
-                combined = b''.join([base64.b64decode(c) for c in error_chunks])
-                final = base64.b64encode(combined).decode('ascii')
-                await stream_service._send_audio(final)
-                logger.info("✓ Error message sent")
-                
-        except Exception as err:
-            logger.error(f"✗ Failed to send error: {err}")
 
 @router.post("/incoming")
 async def handle_incoming_call(

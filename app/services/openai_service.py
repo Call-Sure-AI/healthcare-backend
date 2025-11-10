@@ -1,3 +1,4 @@
+# app\services\openai_service.py
 import openai
 import json
 from typing import Optional, List, Dict, Any
@@ -153,6 +154,63 @@ class OpenAIService:
                 "finish_reason": "error"
             }
 
+    async def process_user_input_streaming(
+        self,
+        user_message: str,
+        conversation_history: List[Dict[str, str]],
+        available_functions: Optional[List[Dict[str, Any]]] = None
+    ) -> Dict[str, Any]:
+        """
+        ⚡ OPTIMIZED: Single LLM call with streaming response
+        """
+        try:
+            messages = self.build_conversation_messages(conversation_history)
+            messages.append({"role": "user", "content": user_message})
+
+            params = {
+                "model": self.model,
+                "messages": messages,
+                "temperature": 0.7,
+                "stream": False  # Keep False for function calls
+            }
+            
+            if available_functions:
+                params["tools"] = [
+                    {"type": "function", "function": func}
+                    for func in available_functions
+                ]
+                params["tool_choice"] = "auto"
+            
+            response = await self.client.chat.completions.create(**params)
+            
+            choice = response.choices[0]
+            message = choice.message
+            
+            result = {
+                "finish_reason": choice.finish_reason,
+                "function_call": None,
+                "response": None
+            }
+
+            if choice.finish_reason == "tool_calls" and message.tool_calls:
+                tool_call = message.tool_calls[0]
+                result["function_call"] = {
+                    "name": tool_call.function.name,
+                    "arguments": json.loads(tool_call.function.arguments),
+                    "id": tool_call.id
+                }
+            else:
+                result["response"] = message.content
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error: {e}")
+            return {
+                "response": "I apologize, but I encountered an error. Could you please try again?",
+                "function_call": None,
+                "finish_reason": "error"
+            }
 
 # Open AI Global instance
 openai_service = OpenAIService()

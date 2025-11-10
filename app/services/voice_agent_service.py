@@ -1,3 +1,4 @@
+# app\services\voice_agent_service.py
 from typing import Dict, Any, Optional, List
 from sqlalchemy.orm import Session
 from datetime import datetime
@@ -60,121 +61,121 @@ class VoiceAgentService:
             return {"success": False, "error": str(e)}
             
     
+    # app/services/voice_agent_service.py - OPTIMIZED
+
     async def process_user_speech(self, call_sid: str, user_text: str) -> Dict[str, Any]:
         start_time = time.time()
-        logger.info(f"\n{'='*80}")
-        logger.info(f"Processing speech for Call SID: {call_sid}")
-        logger.info(f"User input: '{user_text}'")
+        logger.info(f"Processing: '{user_text}'")
 
         try:
             redis_service.append_to_conversation(call_sid, "user", user_text)
-
             session = redis_service.get_session(call_sid)
+            
             if not session:
-                logger.error(f"No session found for {call_sid}")
                 return {
                     "success": False,
-                    "error": "Session not found",
-                    "response": "I seem to have lost our connection. Could you please start over?"
+                    "response": "Session not found. Please start over."
                 }
+            
             conversation_history = session.get("conversation_history", [])
-            logger.info(f"Current conversation length: {len(conversation_history)} messages")
-
-            logger.info("--- RAG Step 1: Requesting Tool Call or Direct Response ---")
+            
+            # Step 1: Get LLM decision
             ai_functions_schema = get_ai_functions()
-            first_llm_response = await openai_service.process_user_input(
+            llm_start = time.time()
+            
+            first_response = await openai_service.process_user_input_streaming(
                 user_message=user_text,
                 conversation_history=conversation_history,
                 available_functions=ai_functions_schema,
             )
+            
+            logger.info(f"⏱️ LLM call: {time.time() - llm_start:.3f}s")
+            
+            if not first_response:
+                return {
+                    "success": False,
+                    "response": "I'm having trouble understanding. Please try again."
+                }
 
-            if not first_llm_response:
-                 logger.error("First LLM call failed.")
-                 return {
-                    "success": False, "error": "LLM interaction failed",
-                    "response": "I'm having trouble understanding right now. Please try again."
-                 }
+            # Step 2: Handle function call OR direct response
+            if first_response.get("function_call"):
+                function_call = first_response["function_call"]
+                function_name = function_call["name"]
+                function_args = function_call["arguments"]
+                tool_call_id = function_call["id"]
 
-            if first_llm_response.get("function_call"):
-                function_call = first_llm_response.get("function_call", {})
-                function_name = function_call.get("name")
-                function_args = function_call.get("arguments", {})
-                tool_call_id = function_call.get("id")
-
-                logger.info(f"LLM decided to call tool: {function_name}")
-                logger.debug(f"Tool Call ID: {tool_call_id}")
-                logger.debug(f"Arguments: {function_args}")
-
-                tool_call_assistant_message = {
+                logger.info(f"🔧 Tool: {function_name}")
+                
+                # Save assistant's tool call message
+                tool_call_message = {
                     "role": "assistant",
                     "content": None,
-                     "tool_calls": [{
-                         "id": tool_call_id,
-                         "type": "function",
-                         "function": {
-                             "name": function_name,
-                             "arguments": json.dumps(function_args)
-                         }
-                     }]
+                    "tool_calls": [{
+                        "id": tool_call_id,
+                        "type": "function",
+                        "function": {
+                            "name": function_name,
+                            "arguments": json.dumps(function_args)
+                        }
+                    }]
                 }
-                redis_service.append_to_conversation(call_sid, "assistant", tool_call_assistant_message)
-
-                function_result_data = self.ai_tools.execute_function(
-                    function_name,
-                    function_args
-                )
-                logger.info(f"Tool '{function_name}' executed. Success: {function_result_data.get('success', 'N/A')}")
-
+                redis_service.append_to_conversation(call_sid, "assistant", tool_call_message)
+                
+                # Execute function
+                tool_start = time.time()
+                function_result = self.ai_tools.execute_function(function_name, function_args)
+                logger.info(f"⏱️ Tool execution: {time.time() - tool_start:.3f}s")
+                
+                # Save tool result
                 tool_result_message = {
                     "tool_call_id": tool_call_id,
                     "role": "tool",
                     "name": function_name,
-                    "content": json.dumps(function_result_data),
+                    "content": json.dumps(function_result),
                 }
                 redis_service.append_to_conversation(call_sid, "tool", tool_result_message)
-
-                logger.info(f"--- RAG Step 2: Generating Response using result of '{function_name}' ---")
+                
+                # Get final response
                 session = redis_service.get_session(call_sid)
                 updated_history = session.get("conversation_history", [])
-
-                final_llm_response_obj = await openai_service.chat_completion(
+                
+                final_llm_start = time.time()
+                final_response = await openai_service.chat_completion(
                     messages=openai_service.build_conversation_messages(updated_history, include_system=True),
                 )
-
-                if final_llm_response_obj and final_llm_response_obj.choices:
-                    final_response_text = final_llm_response_obj.choices[0].message.content
-                    logger.info(f"Final Response (after tool call): '{final_response_text[:100]}...'")
-                    redis_service.append_to_conversation(call_sid, "assistant", final_response_text)
+                logger.info(f"⏱️ Final LLM: {time.time() - final_llm_start:.3f}s")
+                
+                if final_response and final_response.choices:
+                    response_text = final_response.choices[0].message.content
+                    redis_service.append_to_conversation(call_sid, "assistant", response_text)
                     success = True
                 else:
-                    logger.error("Second LLM call (after tool execution) failed.")
-                    final_response_text = self._generate_fallback_response(function_name, function_result_data)
-                    redis_service.append_to_conversation(call_sid, "assistant", final_response_text)
+                    response_text = self._generate_fallback_response(function_name, function_result)
+                    redis_service.append_to_conversation(call_sid, "assistant", response_text)
                     success = False
-
-                duration = time.time() - start_time
-                logger.info(f"Processing complete (Tool Call Path). Duration: {duration:.2f}s")
-                logger.info(f"{'='*80}\n")
-
+                
+                total_time = time.time() - start_time
+                logger.info(f"⏱️ TOTAL (with tool): {total_time:.3f}s")
+                
                 return {
                     "success": success,
-                    "response": final_response_text,
+                    "response": response_text,
                     "function_called": True,
                     "function_name": function_name,
-                    "function_result": function_result_data
+                    "function_result": function_result
                 }
-
+            
             else:
-                response_text = first_llm_response.get("response")
+                # Direct response (no tool call)
+                response_text = first_response.get("response")
                 if not response_text:
-                     logger.error("First LLM call returned no response text and no tool call.")
-                     response_text = "I'm sorry, I didn't quite understand. Could you rephrase?"
-
-                logger.info(f"Direct AI Response (No Tool Call): '{response_text[:100]}...'")
+                    response_text = "I'm sorry, I didn't quite understand. Could you rephrase?"
+                
                 redis_service.append_to_conversation(call_sid, "assistant", response_text)
-                duration = time.time() - start_time
-                logger.info(f"Processing complete (Direct Response Path). Duration: {duration:.2f}s")
-                logger.info(f"{'='*80}\n")
+                
+                total_time = time.time() - start_time
+                logger.info(f"⏱️ TOTAL (direct): {total_time:.3f}s")
+                
                 return {
                     "success": True,
                     "response": response_text,
@@ -182,17 +183,18 @@ class VoiceAgentService:
                 }
 
         except Exception as e:
-            logger.error(f"!!! Critical error in process_user_speech for {call_sid}: {e}", exc_info=True)
-            traceback.print_exc()
-            fallback_response = "I apologize, I encountered an unexpected issue. Please try again later."
+            logger.error(f"Error: {e}", exc_info=True)
+            fallback = "I apologize, I encountered an error. Please try again."
+            
             try:
-                redis_service.append_to_conversation(call_sid, "assistant", fallback_response + f" (System Error: {e})")
+                redis_service.append_to_conversation(call_sid, "assistant", fallback)
             except:
                 pass
+            
             return {
                 "success": False,
                 "error": str(e),
-                "response": fallback_response
+                "response": fallback
             }
 
     def _generate_fallback_response(self, function_name: str, result: Dict[str, Any]) -> str:
