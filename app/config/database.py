@@ -1,3 +1,4 @@
+# app\config\database.py
 from sqlalchemy import create_engine, pool
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
