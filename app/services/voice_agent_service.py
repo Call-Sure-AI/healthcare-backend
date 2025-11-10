@@ -1,6 +1,6 @@
-# app/services/voice_agent_service.py
+# app/services/voice_agent_service.py - ULTRA OPTIMIZED
 
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, AsyncGenerator
 from sqlalchemy.orm import Session
 from datetime import datetime
 from app.services.redis_service import redis_service
@@ -17,6 +17,7 @@ from datetime import datetime
 import traceback
 import json
 import time
+import asyncio
 
 logger = logging.getLogger("agent")
 
@@ -61,26 +62,51 @@ class VoiceAgentService:
             logger.error(f"Error initiating call: {e}")
             return {"success": False, "error": str(e)}
 
-    async def process_user_speech(
+    async def process_user_speech_streaming(
         self, 
         call_sid: str, 
         user_text: str,
         metrics: 'LatencyMetrics' = None
-    ) -> Dict[str, Any]:
-
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        ⚡ NEW: STREAMING version - yields response chunks as they're generated
+        This is the MAIN optimization for low latency!
+        
+        Yields:
+            Dict with 'type' and 'data':
+            - type: 'text' -> data: text chunk
+            - type: 'complete' -> data: full result dict
+            - type: 'error' -> data: error message
+        """
         try:
             redis_service.append_to_conversation(call_sid, "user", user_text)
             session = redis_service.get_session(call_sid)
             
             if not session:
-                return {"success": False, "response": "Session not found."}
+                yield {"type": "error", "data": "Session not found"}
+                return
             
             conversation_history = session.get("conversation_history", [])
             ai_functions_schema = get_ai_functions()
             
+            # ⚡ OPTIMIZATION: Check cache first
+            query_hash = redis_service.hash_query(user_text)
+            cached_response = redis_service.get_cached_response(query_hash)
+            
+            if cached_response and not metrics:  # Don't use cache during testing
+                logger.info("⚡ Cache hit!")
+                yield {"type": "text", "data": cached_response}
+                yield {"type": "complete", "data": {
+                    "success": True,
+                    "response": cached_response,
+                    "cached": True
+                }}
+                return
+            
             if metrics:
                 metrics.llm_request_start = time.time()
             
+            # First LLM call (check for function calls)
             first_response = await openai_service.process_user_input(
                 user_message=user_text,
                 conversation_history=conversation_history,
@@ -93,9 +119,12 @@ class VoiceAgentService:
                 logger.info(f"   LLM: {llm_ms:.0f}ms")
             
             if not first_response:
-                return {"success": False, "response": "I'm having trouble understanding."}
+                error_msg = "I'm having trouble understanding."
+                yield {"type": "text", "data": error_msg}
+                yield {"type": "complete", "data": {"success": False, "response": error_msg}}
+                return
 
-            # Handle function call
+            # ⚡ HANDLE FUNCTION CALL
             if first_response.get("function_call"):
                 function_call = first_response["function_call"]
                 function_name = function_call["name"]
@@ -108,111 +137,165 @@ class VoiceAgentService:
                     metrics.tool_name = function_name
                     metrics.tool_execution_start = time.time()
                 
-                # ⚡ FIX: Store the tool call message properly
-                # Store the assistant message with tool_calls in the conversation
-                session = redis_service.get_session(call_sid)
-                if session:
-                    conversation_history = session.get("conversation_history", [])
-                    
-                    # Add assistant message with tool call
-                    conversation_history.append({
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": [{
-                            "id": tool_call_id,
-                            "type": "function",
-                            "function": {
-                                "name": function_name,
-                                "arguments": json.dumps(function_args)
-                            }
-                        }]
-                    })
-                    
-                    redis_service.update_session(call_sid, {"conversation_history": conversation_history})
+                # ⚡ OPTIMIZATION: Check tool cache
+                args_hash = redis_service.hash_query(json.dumps(function_args, sort_keys=True))
+                cached_tool_result = redis_service.get_cached_tool_result(function_name, args_hash)
                 
-                # Execute function
-                function_result = self.ai_tools.execute_function(function_name, function_args)
+                if cached_tool_result:
+                    logger.info(f"⚡ Tool cache hit: {function_name}")
+                    function_result = cached_tool_result
+                else:
+                    # Store tool call in conversation
+                    session = redis_service.get_session(call_sid)
+                    if session:
+                        conversation_history = session.get("conversation_history", [])
+                        conversation_history.append({
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [{
+                                "id": tool_call_id,
+                                "type": "function",
+                                "function": {
+                                    "name": function_name,
+                                    "arguments": json.dumps(function_args)
+                                }
+                            }]
+                        })
+                        redis_service.update_session(call_sid, {"conversation_history": conversation_history})
+                    
+                    # Execute tool
+                    function_result = self.ai_tools.execute_function(function_name, function_args)
+                    
+                    # ⚡ Cache tool result (5 min TTL)
+                    redis_service.cache_tool_result(function_name, args_hash, function_result, ttl=300)
                 
                 if metrics:
                     metrics.tool_execution_end = time.time()
                     tool_ms = (metrics.tool_execution_end - metrics.tool_execution_start) * 1000
                     logger.info(f"   Tool exec: {tool_ms:.0f}ms")
                 
-                # ⚡ FIX: Store the tool result properly
+                # Store tool result
                 session = redis_service.get_session(call_sid)
                 if session:
                     conversation_history = session.get("conversation_history", [])
-                    
-                    # Add tool result message
                     conversation_history.append({
                         "role": "tool",
                         "tool_call_id": tool_call_id,
                         "name": function_name,
                         "content": json.dumps(function_result)
                     })
-                    
                     redis_service.update_session(call_sid, {"conversation_history": conversation_history})
                 
-                # Second LLM call with updated history
+                # ⚡ CRITICAL: STREAMING second LLM call
                 session = redis_service.get_session(call_sid)
                 updated_history = session.get("conversation_history", [])
                 
                 if metrics:
                     metrics.llm2_request_start = time.time()
                 
-                final_response = await openai_service.chat_completion(
-                    messages=openai_service.build_conversation_messages(updated_history, include_system=True),
+                messages = openai_service.build_conversation_messages(
+                    updated_history, 
+                    include_system=True,
+                    compress=True  # ⚡ Enable compression
                 )
+                
+                # ⚡ STREAM THE RESPONSE
+                full_response = ""
+                chunk_count = 0
+                
+                async for chunk in openai_service.generate_response_streaming(
+                    messages=messages,
+                    temperature=0.5
+                ):
+                    if chunk:
+                        full_response += chunk
+                        chunk_count += 1
+                        
+                        # Yield each chunk immediately
+                        yield {"type": "text", "data": chunk}
+                        
+                        # Track first chunk
+                        if chunk_count == 1 and metrics:
+                            metrics.llm2_first_chunk = time.time()
                 
                 if metrics:
                     metrics.llm2_complete = time.time()
                     llm2_ms = (metrics.llm2_complete - metrics.llm2_request_start) * 1000
                     logger.info(f"   LLM2: {llm2_ms:.0f}ms")
                 
-                if final_response and final_response.choices:
-                    response_text = final_response.choices[0].message.content
-                    redis_service.append_to_conversation(call_sid, "assistant", response_text)
+                # Store complete response
+                if full_response:
+                    redis_service.append_to_conversation(call_sid, "assistant", full_response)
                     success = True
                 else:
-                    response_text = self._generate_fallback_response(function_name, function_result)
-                    redis_service.append_to_conversation(call_sid, "assistant", response_text)
+                    full_response = self._generate_fallback_response(function_name, function_result)
+                    redis_service.append_to_conversation(call_sid, "assistant", full_response)
                     success = False
                 
                 if metrics:
                     metrics.llm_complete = time.time()
                 
-                return {
+                # Final complete message
+                yield {"type": "complete", "data": {
                     "success": success,
-                    "response": response_text,
+                    "response": full_response,
                     "function_called": True,
                     "function_name": function_name,
                     "function_result": function_result
-                }
+                }}
             
             else:
-                # Direct response
+                # ⚡ DIRECT RESPONSE - no function call
                 response_text = first_response.get("response") or "I'm sorry, I didn't quite understand."
+                
+                # Yield complete response
+                yield {"type": "text", "data": response_text}
+                
                 redis_service.append_to_conversation(call_sid, "assistant", response_text)
+                
+                # ⚡ Cache simple responses (1 hour)
+                redis_service.cache_response(query_hash, response_text, ttl=3600)
                 
                 if metrics:
                     metrics.llm_complete = time.time()
                 
-                return {
+                yield {"type": "complete", "data": {
                     "success": True,
                     "response": response_text,
                     "function_called": False
-                }
+                }}
 
         except Exception as e:
             logger.error(f"❌ Error: {e}", exc_info=True)
-            fallback = "I apologize, I encountered an error."
+            error_msg = "I apologize, I encountered an error."
             
-            try:
-                redis_service.append_to_conversation(call_sid, "assistant", fallback)
-            except:
-                pass
-            
-            return {"success": False, "error": str(e), "response": fallback}
+            yield {"type": "error", "data": error_msg}
+            yield {"type": "complete", "data": {
+                "success": False, 
+                "error": str(e), 
+                "response": error_msg
+            }}
+
+    async def process_user_speech(
+        self, 
+        call_sid: str, 
+        user_text: str,
+        metrics: 'LatencyMetrics' = None
+    ) -> Dict[str, Any]:
+        """
+        ⚡ KEPT FOR BACKWARD COMPATIBILITY
+        Non-streaming version - collects all chunks and returns complete response
+        """
+        full_response = ""
+        result = None
+        
+        async for chunk in self.process_user_speech_streaming(call_sid, user_text, metrics):
+            if chunk["type"] == "text":
+                full_response += chunk["data"]
+            elif chunk["type"] == "complete":
+                result = chunk["data"]
+        
+        return result if result else {"success": False, "response": full_response}
 
     def _generate_fallback_response(self, function_name: str, result: Dict[str, Any]) -> str:
         """Generates a simple text response if the second LLM call fails after a tool call."""

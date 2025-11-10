@@ -35,22 +35,25 @@ async def handle_full_transcript(
     transcript: str,
     stream_service: StreamService,
     tts_service: any,
-    speech_end_time: float = None  # ⚡ ADD THIS PARAMETER
+    speech_end_time: float = None
 ):
     """
-    ⚡ OPTIMIZED with CLEAN logging and accurate TTFA tracking
+    ⚡ ULTRA OPTIMIZED: Streaming pipeline
+    
+    Key optimizations:
+    1. Start TTS as soon as we have enough text (sentence buffering)
+    2. Stream audio chunks immediately
+    3. Parallel LLM generation + TTS generation
     """
     # Start tracking
-    interaction_id = str(uuid.uuid4())[:8]  # Short ID
+    interaction_id = str(uuid.uuid4())[:8]
     metrics = latency_tracker.start_interaction(call_sid, interaction_id)
-
-    # ⚡ FIX: Set speech_ended_at from Deepgram
+    
     if speech_end_time:
         metrics.speech_ended_at = speech_end_time
     
     metrics.transcript_received_at = time.time()
     
-    # Clean, single-line log
     logger.info(f"📝 USER: '{transcript}'")
     
     context = call_context.get(call_sid)
@@ -62,53 +65,105 @@ async def handle_full_transcript(
         return
     
     try:
-        # AI Processing
-        ai_result = await agent.process_user_speech(call_sid, transcript, metrics)
+        # ⚡ CRITICAL: Use streaming version
+        text_buffer = ""
+        sentence_buffer = ""
+        response_complete = False
+        ai_result = None
         
-        response_text = ai_result.get("response")
-        if not response_text:
-            response_text = "I'm sorry, could you please repeat that?"
+        # Track if we've started TTS
+        tts_started = False
+        tts_task = None
         
-        logger.info(f"💬 AI: '{response_text[:100]}{'...' if len(response_text) > 100 else ''}'")
-
-        # TTS Generation with streaming
-        metrics.tts_request_start = time.time()
-        await stream_service.clear()
-
-        chunk_count = 0
+        # ⚡ SENTENCE BUFFERING: Start TTS when we have 15+ words
+        MIN_WORDS_FOR_TTS = 15
         
-        # Stream chunks immediately
-        async for audio_b64 in tts_service.generate(response_text):
-            if audio_b64:
-                if chunk_count == 0:
-                    metrics.tts_first_chunk = time.time()
-                    ttfa = (metrics.tts_first_chunk - metrics.transcript_received_at) * 1000
-                    logger.info(f"⚡ First audio in {ttfa:.0f}ms")
+        async for chunk_data in agent.process_user_speech_streaming(call_sid, transcript, metrics):
+            chunk_type = chunk_data["type"]
+            
+            if chunk_type == "text":
+                text_chunk = chunk_data["data"]
+                text_buffer += text_chunk
+                sentence_buffer += text_chunk
                 
-                chunk_count += 1
-                metrics.tts_chunks_count = chunk_count
-                await stream_service.send_audio_chunk(audio_b64, metrics)
+                # Count words in buffer
+                word_count = len(sentence_buffer.split())
+                
+                # ⚡ START TTS when we have enough words
+                if not tts_started and word_count >= MIN_WORDS_FOR_TTS:
+                    # Check if we have a sentence boundary
+                    if any(punct in sentence_buffer for punct in ['. ', '! ', '? ', '\n']):
+                        logger.info(f"⚡ Starting TTS early ({word_count} words)")
+                        tts_started = True
+                        
+                        # Start TTS generation in parallel
+                        tts_task = asyncio.create_task(
+                            self._generate_and_stream_audio(
+                                sentence_buffer.strip(),
+                                stream_service,
+                                tts_service,
+                                metrics,
+                                is_partial=True
+                            )
+                        )
+                        
+                        sentence_buffer = ""  # Reset buffer
+                
+            elif chunk_type == "complete":
+                ai_result = chunk_data["data"]
+                response_complete = True
+                
+                # If we started TTS early, wait for it to finish
+                if tts_task:
+                    await tts_task
+                    tts_task = None
+                
+                # Generate TTS for remaining text
+                if sentence_buffer.strip():
+                    await self._generate_and_stream_audio(
+                        sentence_buffer.strip(),
+                        stream_service,
+                        tts_service,
+                        metrics,
+                        is_partial=False
+                    )
+                
+                break
+            
+            elif chunk_type == "error":
+                logger.error(f"❌ Streaming error: {chunk_data['data']}")
+                break
         
-        metrics.tts_complete = time.time()
+        # If we never started TTS (response was too short), generate it now
+        if not tts_started and text_buffer:
+            await self._generate_and_stream_audio(
+                text_buffer.strip(),
+                stream_service,
+                tts_service,
+                metrics,
+                is_partial=False
+            )
         
-        if chunk_count == 0:
-            logger.error("❌ No audio generated")
-            return
+        # Log the AI response
+        if ai_result:
+            response_text = ai_result.get("response", "")
+            if response_text:
+                preview = response_text[:100] + ('...' if len(response_text) > 100 else '')
+                logger.info(f"💬 AI: '{preview}'")
         
-        # Complete tracking (this logs the full summary)
+        # Complete tracking
         latency_tracker.complete_interaction(interaction_id)
         
     except Exception as e:
         logger.error(f"❌ Error: {e}")
-        traceback.print_exc()  # Add full traceback for debugging
+        traceback.print_exc()
         
         try:
             latency_tracker.complete_interaction(interaction_id)
         except:
             pass
 
-        # ✅ YES - KEEP THIS ERROR RECOVERY CODE
-        # It ensures the user gets a response even if something fails
+        # Error recovery
         try:
             error_msg = "I apologize, I'm having trouble. Could you try again?"
             logger.info("🔧 Sending error message...")
@@ -121,6 +176,50 @@ async def handle_full_transcript(
 
         except Exception as err:
             logger.error(f"❌ Error recovery failed: {err}")
+
+async def _generate_and_stream_audio(
+    text: str,
+    stream_service: StreamService,
+    tts_service: any,
+    metrics: 'LatencyMetrics',
+    is_partial: bool = False
+) -> None:
+    """
+    ⚡ NEW: Helper function to generate and stream audio
+    """
+    if not text or not text.strip():
+        return
+    
+    try:
+        if not is_partial and metrics:
+            metrics.tts_request_start = time.time()
+        
+        await stream_service.clear()
+        
+        chunk_count = 0
+        
+        async for audio_b64 in tts_service.generate(text):
+            if audio_b64:
+                if chunk_count == 0 and metrics and not is_partial:
+                    metrics.tts_first_chunk = time.time()
+                    ttfa = (metrics.tts_first_chunk - metrics.transcript_received_at) * 1000
+                    logger.info(f"⚡ First audio in {ttfa:.0f}ms")
+                
+                chunk_count += 1
+                if metrics:
+                    metrics.tts_chunks_count += chunk_count
+                
+                await stream_service.send_audio_chunk(audio_b64, metrics)
+        
+        if not is_partial and metrics:
+            metrics.tts_complete = time.time()
+        
+        if chunk_count == 0:
+            logger.error("❌ No audio generated")
+            
+    except Exception as e:
+        logger.error(f"❌ TTS error: {e}")
+        traceback.print_exc()
 
 @router.post("/incoming")
 async def handle_incoming_call(
