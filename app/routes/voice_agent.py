@@ -1,3 +1,4 @@
+# app\routes\voice_agent.py
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect, Form, Query, Depends
 from fastapi.responses import Response, JSONResponse
 from sqlalchemy.orm import Session
@@ -7,6 +8,7 @@ import base64
 import traceback
 import asyncio
 import logging
+import uuid
 from twilio.twiml.voice_response import VoiceResponse, Connect
 from app.config.database import SessionLocal, get_db
 from app.config.voice_config import voice_config
@@ -18,118 +20,107 @@ from app.services.elevenlabs_service import elevenlabs_service
 from app.services.deepgram_service import DeepgramManager
 import time
 from starlette.websockets import WebSocketState
+from app.utils.latency_tracker import latency_tracker
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# logging.basicConfig(level=logging.INFO)
+# Use clean logger
+logger = logging.getLogger("voice")
 
 router = APIRouter(prefix="/voice", tags=["Voice Agent"])
 
 call_context: Dict[str, Dict[str, Any]] = {}
 
-
 async def handle_full_transcript(
     call_sid: str,
     transcript: str,
     stream_service: StreamService,
-    tts_service: any
+    tts_service: any,
+    speech_end_time: float = None  # ⚡ ADD THIS PARAMETER
 ):
     """
-    Callback triggered by Deepgram when user finishes speaking.
-    Combines ALL audio chunks before sending to prevent dropouts.
+    ⚡ OPTIMIZED with CLEAN logging and accurate TTFA tracking
     """
-    logger.info("=" * 80)
-    logger.info(f"TRANSCRIPT RECEIVED")
-    logger.info(f"Call SID: {call_sid}")
-    logger.info(f"User said: '{transcript}'")
-    logger.info(f"Length: {len(transcript)} chars")
+    # Start tracking
+    interaction_id = str(uuid.uuid4())[:8]  # Short ID
+    metrics = latency_tracker.start_interaction(call_sid, interaction_id)
+
+    # ⚡ FIX: Set speech_ended_at from Deepgram
+    if speech_end_time:
+        metrics.speech_ended_at = speech_end_time
+    
+    metrics.transcript_received_at = time.time()
+    
+    # Clean, single-line log
+    logger.info(f"📝 USER: '{transcript}'")
     
     context = call_context.get(call_sid)
-    if not context:
-        logger.error("No context found")
-        return
-    
-    if not transcript or not transcript.strip():
-        logger.warning("Empty transcript")
+    if not context or not transcript.strip():
         return
     
     agent: VoiceAgentService = context.get("agent")
     if not agent:
-        logger.error("No agent in context")
         return
     
     try:
-        ai_start = time.time()
-        logger.info("Calling VoiceAgentService.process_user_speech()...")
-        
-        ai_result = await agent.process_user_speech(call_sid, transcript)
-        
-        logger.info(f"AI Processing: {time.time() - ai_start:.2f}s")
-        logger.info(f"Success: {ai_result.get('success', False)}")
+        # AI Processing
+        ai_result = await agent.process_user_speech(call_sid, transcript, metrics)
         
         response_text = ai_result.get("response")
         if not response_text:
-            logger.warning("No response, using fallback")
             response_text = "I'm sorry, could you please repeat that?"
         
-        logger.info(f"AI Response: '{response_text[:80]}...'")
+        logger.info(f"💬 AI: '{response_text[:100]}{'...' if len(response_text) > 100 else ''}'")
 
-        logger.info("🎤 Generating TTS audio...")
-        tts_start = time.time()
-        
-        # Clear Twilio buffer
+        # TTS Generation with streaming
+        metrics.tts_request_start = time.time()
         await stream_service.clear()
 
-        audio_chunks = []
         chunk_count = 0
         
+        # Stream chunks immediately
         async for audio_b64 in tts_service.generate(response_text):
             if audio_b64:
-                audio_chunks.append(audio_b64)
+                if chunk_count == 0:
+                    metrics.tts_first_chunk = time.time()
+                    ttfa = (metrics.tts_first_chunk - metrics.transcript_received_at) * 1000
+                    logger.info(f"⚡ First audio in {ttfa:.0f}ms")
+                
                 chunk_count += 1
+                metrics.tts_chunks_count = chunk_count
+                await stream_service.send_audio_chunk(audio_b64, metrics)
         
-        if not audio_chunks:
-            logger.error("No audio generated!")
+        metrics.tts_complete = time.time()
+        
+        if chunk_count == 0:
+            logger.error("❌ No audio generated")
             return
         
-        logger.info(f"Generated {chunk_count} chunks from TTS")
-        
-        combined_audio_bytes = b''
-        for chunk_b64 in audio_chunks:
-            chunk_bytes = base64.b64decode(chunk_b64)
-            combined_audio_bytes += chunk_bytes
-        
-        total_size = len(combined_audio_bytes)
-        logger.info(f"Combined into single buffer: {total_size} bytes")
-
-        final_audio_b64 = base64.b64encode(combined_audio_bytes).decode('ascii')
-
-        await stream_service._send_audio(final_audio_b64)
-        
-        tts_duration = time.time() - tts_start
-        logger.info(f"✓ Audio complete: {tts_duration:.2f}s ({total_size} bytes)")
-        logger.info("=" * 80)
+        # Complete tracking (this logs the full summary)
+        latency_tracker.complete_interaction(interaction_id)
         
     except Exception as e:
-        logger.error(f"✗ Error: {e}")
-        traceback.print_exc()
+        logger.error(f"❌ Error: {e}")
+        traceback.print_exc()  # Add full traceback for debugging
+        
+        try:
+            latency_tracker.complete_interaction(interaction_id)
+        except:
+            pass
 
+        # ✅ YES - KEEP THIS ERROR RECOVERY CODE
+        # It ensures the user gets a response even if something fails
         try:
             error_msg = "I apologize, I'm having trouble. Could you try again?"
             logger.info("🔧 Sending error message...")
-            
-            error_chunks = []
+
             async for audio_b64 in tts_service.generate(error_msg):
                 if audio_b64:
-                    error_chunks.append(audio_b64)
-            
-            if error_chunks:
-                combined = b''.join([base64.b64decode(c) for c in error_chunks])
-                final = base64.b64encode(combined).decode('ascii')
-                await stream_service._send_audio(final)
-                logger.info("✓ Error message sent")
-                
+                    await stream_service.send_audio_chunk(audio_b64, None)
+
+            logger.info("✓ Error message sent")
+
         except Exception as err:
-            logger.error(f"✗ Failed to send error: {err}")
+            logger.error(f"❌ Error recovery failed: {err}")
 
 @router.post("/incoming")
 async def handle_incoming_call(
@@ -142,6 +133,8 @@ async def handle_incoming_call(
     try:
         logger.info("\n" + "=" * 80)
         logger.info(f"Incoming call: {CallSid} from {From}")
+        logger.info(f"Request URL: {request.url}")
+        logger.info(f"Request path: {request.url.path}")
         
         response = VoiceResponse()
         
@@ -150,8 +143,23 @@ async def handle_incoming_call(
             response.hangup()
             return Response(content=str(response), media_type="application/xml")
         
-        # WebSocket URL
-        websocket_url = f"wss://{request.url.hostname}/api/v1/voice/stream?call_sid={CallSid}"
+        # ⚡ CHECK X-Forwarded-Prefix header (set by Nginx)
+        forwarded_prefix = request.headers.get("x-forwarded-prefix", "")
+        
+        # Log all headers for debugging
+        logger.info(f"X-Forwarded-Prefix: '{forwarded_prefix}'")
+        logger.info(f"X-Forwarded-Host: '{request.headers.get('x-forwarded-host', '')}'")
+        
+        # Determine environment from X-Forwarded-Prefix
+        if forwarded_prefix == "/api/dev":
+            # Development environment
+            websocket_url = f"wss://{request.url.hostname}/api/dev/v1/voice/stream?call_sid={CallSid}"
+            logger.info("🔧 Environment: DEVELOPMENT")
+        else:
+            # Production environment
+            websocket_url = f"wss://{request.url.hostname}/api/v1/voice/stream?call_sid={CallSid}"
+            logger.info("🏭 Environment: PRODUCTION")
+        
         logger.info(f"🔌 WebSocket URL: {websocket_url}")
         
         # Connect to WebSocket stream
@@ -281,8 +289,8 @@ async def websocket_stream(websocket: WebSocket):
         try:
             deepgram_service = deepgram_manager.create_connection(
                 call_sid=call_sid,
-                on_speech_end_callback=lambda transcript: asyncio.create_task(
-                    handle_full_transcript(call_sid, transcript, stream_service, tts_service)
+                on_speech_end_callback=lambda transcript, speech_end_time: asyncio.create_task(
+                    handle_full_transcript(call_sid, transcript, stream_service, tts_service, speech_end_time)
                 )
             )
 

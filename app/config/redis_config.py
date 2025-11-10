@@ -1,3 +1,4 @@
+# app\config\redis_config.py
 import os
 import redis
 from typing import Optional

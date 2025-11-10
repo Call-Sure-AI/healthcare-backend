@@ -1,3 +1,4 @@
+# app\services\deepgram_service.py
 import asyncio
 import base64
 import logging
@@ -6,10 +7,11 @@ from typing import Callable, Awaitable, Dict
 from app.config.voice_config import voice_config
 from deepgram import DeepgramClient, DeepgramClientOptions, LiveTranscriptionEvents, LiveOptions
 import traceback
+import time
 
 logger = logging.getLogger(__name__)
 
-TranscriptCallback = Callable[[str], Awaitable[None]]
+TranscriptCallback = Callable[[str, float], Awaitable[None]]
 
 
 class DeepgramService:
@@ -137,12 +139,17 @@ class DeepgramService:
     async def _on_utterance_end(self, *args, **kwargs):
         if self.final_result.strip():
             final_text = self.final_result.strip()
+            
+            # ⚡ ADD: Track when speech ended
+            speech_end_time = time.time()
+            
             logger.info("=" * 80)
             logger.info("UTTERANCE END!")
             logger.info(f"USER SAID: '{final_text}'")
             logger.info("=" * 80)
             
-            await self._on_speech_end(final_text)
+            # Pass speech_end_time to callback
+            await self._on_speech_end(final_text, speech_end_time)
             self.final_result = ""
     
     async def _on_transcript(self, *args, **kwargs):
@@ -175,12 +182,16 @@ class DeepgramService:
                 if speech_final:
                     final_text = self.final_result.strip()
                     
+                    # ⚡ FIX: Track speech end time
+                    speech_end_time = time.time()
+                    
                     logger.info("=" * 80)
                     logger.info("SPEECH FINAL!")
                     logger.info(f"USER SAID: '{final_text}'")
                     logger.info("=" * 80)
 
-                    await self._on_speech_end(final_text)
+                    # ⚡ FIX: Pass speech_end_time
+                    await self._on_speech_end(final_text, speech_end_time)
                     
                     self.final_result = ""
             else:

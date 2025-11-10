@@ -1,3 +1,4 @@
+# app\main.py
 from fastapi import FastAPI, Request, status, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -22,8 +23,27 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 import inspect
 import logging
+import sys
 
-logging.basicConfig(level=logging.DEBUG)
+# ⚡ CLEAN LOGGING CONFIGURATION
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s | %(levelname)-8s | %(message)s',
+    datefmt='%H:%M:%S',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ],
+    force=True
+)
+
+# Silence noisy loggers
+logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
+logging.getLogger('uvicorn.access').setLevel(logging.WARNING)
+logging.getLogger('httpx').setLevel(logging.WARNING)
+logging.getLogger('httpcore').setLevel(logging.WARNING)
+
+# Get our application logger
+logger = logging.getLogger(__name__)
 
 Base.metadata.create_all(bind=engine)
 
@@ -98,14 +118,9 @@ app.add_middleware(
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    print(f"Request path: {request.url.path}")
-    print(f"Request headers: {dict(request.headers)}")
-    print(f"Request client: {request.client}")
-    
-    if "upgrade" in request.headers.get("connection", "").lower():
-        print("WebSocket upgrade detected!")
-        print(f"Origin header: {request.headers.get('origin', 'NO ORIGIN')}")
-        print(f"Host header: {request.headers.get('host', 'NO HOST')}")
+    # Only log important endpoints
+    if request.url.path.startswith("/api/v1/voice"):
+        logger.info(f"🔌 {request.method} {request.url.path}")
     
     response = await call_next(request)
     return response

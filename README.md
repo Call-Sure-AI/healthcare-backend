@@ -5,6 +5,7 @@ pip install -r requirements.txt
 python -m app.main
 
 # Or use uvicorn directly
+.venv\Scripts\activate.bat
 uvicorn app.main:app --reload
 
 # ngrok setup
@@ -50,3 +51,33 @@ http://13.232.95.198:8000/api/v1/voice/incoming"# CI/CD test"
 "# CI/CD test" 
 "# CI/CD test" 
 "# CI/CD test" 
+
+
+## 📋 **How It Works:**
+
+### **Production Call:**
+```
+Twilio → https://health.callsure.ai/api/v1/voice/incoming
+         ↓
+         Nginx routes to → http://127.0.0.1:8000/api/v1/voice/incoming
+         ↓
+         Detects: NO "/api/dev/" in path
+         ↓
+         Returns: wss://health.callsure.ai/api/v1/voice/stream
+         ↓
+         Nginx routes to → ws://127.0.0.1:8000/api/v1/voice/stream ✅
+```
+
+### **Development Call:**
+```
+Twilio → https://health.callsure.ai/api/dev/v1/voice/incoming
+         ↓
+         Nginx routes to → http://127.0.0.1:8001/api/v1/voice/incoming
+         ↓
+         x-forwarded-prefix: /api/dev
+         ↓
+         Detects: "/api/dev/" in prefix
+         ↓
+         Returns: wss://health.callsure.ai/api/dev/v1/voice/stream
+         ↓
+         Nginx routes to → ws://127.0.0.1:8001/api/v1/voice/stream ✅

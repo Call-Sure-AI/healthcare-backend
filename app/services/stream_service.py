@@ -1,10 +1,10 @@
+# app/services/stream_service.py - OPTIMIZED VERSION
+
 import uuid
 import json
-import asyncio
 import base64
 import logging
 from typing import Dict, Optional, Callable
-from collections import OrderedDict
 from fastapi import WebSocket
 import time
 from starlette.websockets import WebSocketState
@@ -20,54 +20,45 @@ FRAME_BYTES = int(SAMPLE_RATE * BYTES_PER_SAMPLE * FRAME_MS / 1000)
 class StreamService:
     def __init__(self, websocket: WebSocket):
         self.ws = websocket
-        self.expected_audio_index: int = 0
-        self.audio_buffer: Dict[int, str] = OrderedDict()
         self.stream_sid: str = ""
-        self.mark_callbacks: Dict[str, Callable] = {}
+        self.last_mark: str = ""
 
     def set_stream_sid(self, stream_sid: str) -> None:
         self.stream_sid = stream_sid
-        logger.info(f"StreamService -> Stream SID set: {stream_sid}")
+        logger.info(f"🔌 Stream SID: {stream_sid}")
 
     async def clear(self) -> None:
+        """Clear Twilio's audio buffer"""
         if not self.stream_sid:
             return
+        
         msg = {
             "event": "clear",
             "streamSid": self.stream_sid
         }
         await self.ws.send_text(json.dumps(msg))
-        logger.info("StreamService -> Sent clear")
+        logger.debug("🧹 Buffer cleared")
 
-    async def _send_audio(self, audio_b64: str) -> None:
-        if not self.stream_sid:
-            logger.error("StreamService -> Cannot send audio: streamSid not set")
-            return
-        
-        if not audio_b64:
-            logger.error("StreamService -> Cannot send empty audio")
+    async def send_audio_chunk(self, audio_b64: str, metrics=None) -> None:
+        """
+        ⚡ OPTIMIZED: Send single audio chunk immediately with latency tracking
+        """
+        if not self.stream_sid or not audio_b64:
             return
         
         try:
             audio_bytes = base64.b64decode(audio_b64)
-            total = len(audio_bytes)
-
-            audio_duration_sec = total / SAMPLE_RATE
-            
-            logger.info(f"StreamService -> Starting audio playback:")
-            logger.info(f"   📊 Size: {total} bytes")
-            logger.info(f"   ⏱️  Duration: ~{audio_duration_sec:.2f}s")
-            
-            start_time = time.time()
             sent = 0
+            total = len(audio_bytes)
+            
+            # Track first audio sent (CRITICAL METRIC)
+            if metrics and metrics.first_audio_sent is None:
+                metrics.first_audio_sent = time.time()
+                logger.debug(f"⚡ First audio frame sent")
+            
+            # Send in 20ms frames for Twilio
             frames_sent = 0
-
             while sent < total:
-                if frames_sent % 100 == 0 and frames_sent > 0:
-                    if self.ws.client_state != WebSocketState.CONNECTED:
-                        logger.warning(f"WebSocket disconnected (after {frames_sent} frames)")
-                        break
-                
                 frame = audio_bytes[sent: sent + FRAME_BYTES]
                 if not frame:
                     break
@@ -76,37 +67,40 @@ class StreamService:
                 media_message = {
                     "event": "media",
                     "streamSid": self.stream_sid,
-                    "media": {
-                        "payload": payload
-                    }
+                    "media": {"payload": payload}
                 }
                 
                 await self.ws.send_text(json.dumps(media_message))
                 sent += len(frame)
                 frames_sent += 1
-
             
-            elapsed_time = time.time() - start_time
-            
-            logger.info(f"StreamService -> Audio sent:")
-            logger.info(f"Frames: {frames_sent}")
-            logger.info(f"Bytes: {sent}/{total}")
-            logger.info(f"Time: {elapsed_time:.2f}s")
-
-            mark_label = str(uuid.uuid4())
-            mark_message = {
-                "event": "mark",
-                "streamSid": self.stream_sid,
-                "mark": {"name": mark_label},
-            }
-            
-            await self.ws.send_text(json.dumps(mark_message))
-            
-            logger.info(f"Audio sent ({frames_sent} frames, {sent} bytes)")
+            # Update metrics
+            if metrics:
+                metrics.last_audio_sent = time.time()
+                metrics.audio_frames_sent += frames_sent
+                metrics.total_audio_bytes += total
             
         except Exception as e:
-            logger.error(f"StreamService -> Error sending audio: {e}")
-            traceback.print_exc()
+            logger.error(f"❌ Error sending chunk: {e}")
             raise
 
+    async def send_mark(self, mark_name: str = None) -> str:
+        """Send a mark event to track playback completion"""
+        if not self.stream_sid:
+            return ""
+        
+        mark_label = mark_name or str(uuid.uuid4())
+        mark_message = {
+            "event": "mark",
+            "streamSid": self.stream_sid,
+            "mark": {"name": mark_label}
+        }
+        
+        await self.ws.send_text(json.dumps(mark_message))
+        self.last_mark = mark_label
+        return mark_label
 
+    # Keep _send_audio for backward compatibility if needed
+    async def _send_audio(self, audio_b64: str) -> None:
+        """Legacy method - redirects to send_audio_chunk"""
+        await self.send_audio_chunk(audio_b64, None)
