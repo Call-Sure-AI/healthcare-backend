@@ -137,12 +137,15 @@ async def handle_incoming_call(
             response.hangup()
             return Response(content=str(response), media_type="application/xml")
         
-        # ⚡ DETECT ENVIRONMENT from X-Forwarded-Prefix header or path
+        # ⚡ CHECK X-Forwarded-Prefix header (set by Nginx)
         forwarded_prefix = request.headers.get("x-forwarded-prefix", "")
-        request_path = request.url.path
         
-        # Determine if this is dev or prod based on the incoming path/prefix
-        if "/api/dev/" in forwarded_prefix or "/api/dev/" in request_path:
+        # Log all headers for debugging
+        logger.info(f"X-Forwarded-Prefix: '{forwarded_prefix}'")
+        logger.info(f"X-Forwarded-Host: '{request.headers.get('x-forwarded-host', '')}'")
+        
+        # Determine environment from X-Forwarded-Prefix
+        if forwarded_prefix == "/api/dev":
             # Development environment
             websocket_url = f"wss://{request.url.hostname}/api/dev/v1/voice/stream?call_sid={CallSid}"
             logger.info("🔧 Environment: DEVELOPMENT")
