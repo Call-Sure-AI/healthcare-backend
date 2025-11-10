@@ -23,11 +23,28 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 import inspect
 import logging
+import sys
 
-logging.basicConfig(level=logging.DEBUG)
+# Force all logs to stdout for Docker
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s | %(levelname)-8s | %(name)s | %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)  # Force stdout
+    ],
+    force=True  # Override any existing config
+)
 
+
+# Also configure root logger
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
 Base.metadata.create_all(bind=engine)
 
+# Ensure all loggers use stdout
+for handler in root_logger.handlers:
+    handler.setStream(sys.stdout)
+    
 app = FastAPI(
     title="Healthcare Appointment Booking System",
     description="""
