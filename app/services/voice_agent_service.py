@@ -1,4 +1,5 @@
-# app\services\voice_agent_service.py
+# app/services/voice_agent_service.py
+
 from typing import Dict, Any, Optional, List
 from sqlalchemy.orm import Session
 from datetime import datetime
@@ -16,8 +17,6 @@ from datetime import datetime
 import traceback
 import json
 import time
-
-import logging
 
 logger = logging.getLogger("agent")
 
@@ -55,15 +54,12 @@ class VoiceAgentService:
             self.db.add(db_session)
             self.db.commit()
             
-            print(f"Call initiated: {call_sid}")
+            logger.debug(f"Call initiated: {call_sid}")
             return {"success": True, "call_sid": call_sid}
             
         except Exception as e:
-            print(f"Error initiating call: {e}")
+            logger.error(f"Error initiating call: {e}")
             return {"success": False, "error": str(e)}
-            
-    
-    # app/services/voice_agent_service.py - OPTIMIZED
 
     async def process_user_speech(
         self, 
@@ -112,22 +108,29 @@ class VoiceAgentService:
                     metrics.tool_name = function_name
                     metrics.tool_execution_start = time.time()
                 
-                # Tool call message
-                tool_call_message = {
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [{
-                        "id": tool_call_id,
-                        "type": "function",
-                        "function": {
-                            "name": function_name,
-                            "arguments": json.dumps(function_args)
-                        }
-                    }]
-                }
-                redis_service.append_to_conversation(call_sid, "assistant", tool_call_message)
+                # ⚡ FIX: Store the tool call message properly
+                # Store the assistant message with tool_calls in the conversation
+                session = redis_service.get_session(call_sid)
+                if session:
+                    conversation_history = session.get("conversation_history", [])
+                    
+                    # Add assistant message with tool call
+                    conversation_history.append({
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [{
+                            "id": tool_call_id,
+                            "type": "function",
+                            "function": {
+                                "name": function_name,
+                                "arguments": json.dumps(function_args)
+                            }
+                        }]
+                    })
+                    
+                    redis_service.update_session(call_sid, {"conversation_history": conversation_history})
                 
-                # Execute
+                # Execute function
                 function_result = self.ai_tools.execute_function(function_name, function_args)
                 
                 if metrics:
@@ -135,16 +138,22 @@ class VoiceAgentService:
                     tool_ms = (metrics.tool_execution_end - metrics.tool_execution_start) * 1000
                     logger.info(f"   Tool exec: {tool_ms:.0f}ms")
                 
-                # Tool result message
-                tool_result_message = {
-                    "tool_call_id": tool_call_id,
-                    "role": "tool",
-                    "name": function_name,
-                    "content": json.dumps(function_result),
-                }
-                redis_service.append_to_conversation(call_sid, "tool", tool_result_message)
+                # ⚡ FIX: Store the tool result properly
+                session = redis_service.get_session(call_sid)
+                if session:
+                    conversation_history = session.get("conversation_history", [])
+                    
+                    # Add tool result message
+                    conversation_history.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "name": function_name,
+                        "content": json.dumps(function_result)
+                    })
+                    
+                    redis_service.update_session(call_sid, {"conversation_history": conversation_history})
                 
-                # Second LLM call
+                # Second LLM call with updated history
                 session = redis_service.get_session(call_sid)
                 updated_history = session.get("conversation_history", [])
                 
@@ -209,7 +218,6 @@ class VoiceAgentService:
         """Generates a simple text response if the second LLM call fails after a tool call."""
         logger.warning(f"Generating fallback response for failed generation after tool '{function_name}'")
         if result.get("success"):
-            # minimal useful response based on the successful tool call
             if function_name == "get_available_doctors":
                 count = result.get("count", 0)
                 return f"I found {count} doctor(s) matching your request. Could you specify who you'd like?" if count else "I couldn't find any matching doctors right now."
@@ -217,7 +225,6 @@ class VoiceAgentService:
                  count = result.get("count", 0)
                  return f"I found {count} available time slots for that date. Which time would work?" if count else "No slots seem to be available on that date."
             elif function_name == "book_appointment_in_hour_range":
-                # Booking succeeded, but generation failed
                 appt = result.get("appointment", {})
                 return f"Okay, the appointment for {appt.get('patient_name')} is booked for {appt.get('appointment_date')} at {appt.get('appointment_time')}. Confirmation {appt.get('confirmation_number')}."
             elif function_name == "search_doctor_information":
@@ -226,7 +233,6 @@ class VoiceAgentService:
             else:
                 return "I've processed your request. Is there anything else?"
         else:
-            # Tool call failed
             error = result.get("error", "there was an issue")
             return f"I encountered a problem trying to {function_name.replace('_', ' ')}: {error}. Please try again."
     
@@ -249,7 +255,7 @@ class VoiceAgentService:
             for doctor in available_doctors:
                 doctor_name_lower = doctor["name"].lower()
                 if doctor_name_lower == input_clean or doctor_name_lower.replace('dr.', '').replace('dr', '').strip() == input_clean:
-                    print(f"   🎯 Exact name match: {doctor['name']}")
+                    logger.debug(f"Exact name match: {doctor['name']}")
                     return doctor["doctor_id"]
 
             for doctor in available_doctors:
@@ -261,14 +267,14 @@ class VoiceAgentService:
                     if len(input_part) > 2:
                         for name_part in doctor_name_parts:
                             if input_part in name_part or name_part in input_part:
-                                print(f"Partial match: {doctor['name']} (matched '{input_part}')")
+                                logger.debug(f"Partial match: {doctor['name']}")
                                 return doctor["doctor_id"]
             
-            print(f"No match found for '{input_id}'")
+            logger.debug(f"No match found for '{input_id}'")
             return None
             
         except Exception as e:
-            print(f"Error resolving doctor ID: {e}")
+            logger.error(f"Error resolving doctor ID: {e}")
             return None
 
     async def _update_session_from_function(
@@ -303,7 +309,7 @@ class VoiceAgentService:
                 hour = int(slot.split(':')[0])
                 hourly_slots[hour].append(slot)
             except (ValueError, IndexError):
-                print(f"Warning: Could not parse slot '{slot}'")
+                logger.warning(f"Could not parse slot '{slot}'")
         return dict(sorted(hourly_slots.items()))
 
     async def end_call(self, call_sid: str) -> Dict[str, Any]:
@@ -330,11 +336,11 @@ class VoiceAgentService:
 
             redis_service.delete_session(call_sid)
             
-            print(f"Call ended: {call_sid}")
+            logger.debug(f"Call ended: {call_sid}")
             return {"success": True}
             
         except Exception as e:
-            print(f"Error ending call: {e}")
+            logger.error(f"Error ending call: {e}")
             return {"success": False, "error": str(e)}
     
     async def _send_confirmation_sms(self, session: Dict[str, Any]):
@@ -345,7 +351,7 @@ class VoiceAgentService:
 
             is_valid, formatted_phone = validate_phone_number(phone)
             if not is_valid:
-                print(f"Invalid phone number: {phone}")
+                logger.warning(f"Invalid phone number: {phone}")
                 return
 
             appointment_id = session.get("appointment_id")
@@ -366,10 +372,10 @@ class VoiceAgentService:
                 appointment_id=appointment_id
             )
             
-            print(f"Confirmation SMS sent to {formatted_phone}")
+            logger.info(f"Confirmation SMS sent to {formatted_phone}")
             
         except Exception as e:
-            print(f"Error sending SMS: {e}")
+            logger.error(f"Error sending SMS: {e}")
 
     def _extract_doctor_from_speech(self, user_text: str, available_doctors: List[Dict]) -> str:
         user_lower = user_text.lower()

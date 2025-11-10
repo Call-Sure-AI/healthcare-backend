@@ -182,12 +182,16 @@ class DeepgramService:
                 if speech_final:
                     final_text = self.final_result.strip()
                     
+                    # ⚡ FIX: Track speech end time
+                    speech_end_time = time.time()
+                    
                     logger.info("=" * 80)
                     logger.info("SPEECH FINAL!")
                     logger.info(f"USER SAID: '{final_text}'")
                     logger.info("=" * 80)
 
-                    await self._on_speech_end(final_text)
+                    # ⚡ FIX: Pass speech_end_time
+                    await self._on_speech_end(final_text, speech_end_time)
                     
                     self.final_result = ""
             else:
