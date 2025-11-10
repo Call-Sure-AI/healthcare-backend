@@ -5,6 +5,7 @@ pip install -r requirements.txt
 python -m app.main
 
 # Or use uvicorn directly
+.venv\Scripts\activate.bat
 uvicorn app.main:app --reload
 
 # ngrok setup

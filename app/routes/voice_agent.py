@@ -8,6 +8,7 @@ import base64
 import traceback
 import asyncio
 import logging
+import uuid
 from twilio.twiml.voice_response import VoiceResponse, Connect
 from app.config.database import SessionLocal, get_db
 from app.config.voice_config import voice_config
@@ -19,6 +20,7 @@ from app.services.elevenlabs_service import elevenlabs_service
 from app.services.deepgram_service import DeepgramManager
 import time
 from starlette.websockets import WebSocketState
+from app.utils.latency_tracker import latency_tracker
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -27,7 +29,6 @@ router = APIRouter(prefix="/voice", tags=["Voice Agent"])
 
 call_context: Dict[str, Dict[str, Any]] = {}
 
-
 async def handle_full_transcript(
     call_sid: str,
     transcript: str,
@@ -35,53 +36,114 @@ async def handle_full_transcript(
     tts_service: any
 ):
     """
-    OPTIMIZED: Stream audio chunks as they arrive (no buffering)
+    ⚡ OPTIMIZED: Stream audio chunks immediately with full latency tracking
     """
-    logger.info(f"TRANSCRIPT: '{transcript}'")
+    # Start tracking
+    interaction_id = str(uuid.uuid4())
+    metrics = latency_tracker.start_interaction(call_sid, interaction_id)
+    metrics.transcript_received_at = time.time()
+    
+    logger.info("=" * 80)
+    logger.info(f"📝 TRANSCRIPT | Interaction: {interaction_id}")
+    logger.info(f"Call: {call_sid}")
+    logger.info(f"User: '{transcript}'")
+    logger.info("=" * 80)
     
     context = call_context.get(call_sid)
-    if not context or not transcript.strip():
+    if not context:
+        logger.error("❌ No context found")
+        return
+    
+    if not transcript or not transcript.strip():
+        logger.warning("⚠️ Empty transcript")
         return
     
     agent: VoiceAgentService = context.get("agent")
     if not agent:
+        logger.error("❌ No agent in context")
         return
     
     try:
+        # AI Processing with latency tracking
+        logger.info("🤖 Processing with AI...")
         ai_start = time.time()
-        ai_result = await agent.process_user_speech(call_sid, transcript)
-        logger.info(f"⏱️ AI Processing: {time.time() - ai_start:.3f}s")
+        
+        ai_result = await agent.process_user_speech(call_sid, transcript, metrics)
+        
+        ai_duration = time.time() - ai_start
+        logger.info(f"⏱️ AI Processing: {ai_duration*1000:.0f}ms")
         
         response_text = ai_result.get("response")
         if not response_text:
+            logger.warning("⚠️ No response, using fallback")
             response_text = "I'm sorry, could you please repeat that?"
         
-        logger.info(f"🎤 Streaming TTS...")
-        tts_start = time.time()
+        logger.info(f"💬 Response: '{response_text[:80]}...'")
+
+        # TTS Generation with streaming
+        logger.info("🎤 Starting TTS streaming...")
+        metrics.tts_request_start = time.time()
         
-        # Clear buffer ONCE
+        # Clear Twilio buffer
         await stream_service.clear()
-        
+
         chunk_count = 0
-        first_chunk_latency = None
         
-        # ⚡ STREAM CHUNKS IMMEDIATELY - DON'T BUFFER
+        # ⚡ STREAM CHUNKS IMMEDIATELY - NO BUFFERING
         async for audio_b64 in tts_service.generate(response_text):
             if audio_b64:
+                # Track first chunk
                 if chunk_count == 0:
-                    first_chunk_latency = time.time() - tts_start
-                    logger.info(f"⚡ First chunk: {first_chunk_latency:.3f}s")
+                    metrics.tts_first_chunk = time.time()
+                    ttfa = (metrics.tts_first_chunk - metrics.transcript_received_at) * 1000
+                    logger.info(f"⚡ FIRST AUDIO CHUNK: {ttfa:.0f}ms from transcript")
                 
-                # Send immediately without combining
-                await stream_service.send_audio_chunk(audio_b64)
                 chunk_count += 1
+                metrics.tts_chunks_count = chunk_count
+                
+                # Send immediately (with tracking)
+                await stream_service.send_audio_chunk(audio_b64, metrics)
         
-        total_time = time.time() - tts_start
-        logger.info(f"✓ Streamed {chunk_count} chunks in {total_time:.3f}s")
+        metrics.tts_complete = time.time()
+        
+        if chunk_count == 0:
+            logger.error("❌ No audio generated!")
+            return
+        
+        logger.info(f"✓ Streamed {chunk_count} TTS chunks")
+        
+        # Complete interaction tracking and log summary
+        calculated_metrics = latency_tracker.complete_interaction(interaction_id)
+        
+        # Log simplified summary
+        if calculated_metrics:
+            ttfa = calculated_metrics.get("time_to_first_audio_ms", 0)
+            total = calculated_metrics.get("total_interaction_time_ms", 0)
+            logger.info(f"📊 LATENCY: TTFA={ttfa:.0f}ms | Total={total:.0f}ms")
         
     except Exception as e:
-        logger.error(f"Error: {e}")
+        logger.error(f"❌ Error: {e}")
         traceback.print_exc()
+        
+        # Still complete tracking
+        try:
+            latency_tracker.complete_interaction(interaction_id)
+        except:
+            pass
+
+        # Error recovery
+        try:
+            error_msg = "I apologize, I'm having trouble. Could you try again?"
+            logger.info("🔧 Sending error message...")
+            
+            async for audio_b64 in tts_service.generate(error_msg):
+                if audio_b64:
+                    await stream_service.send_audio_chunk(audio_b64, None)
+                        
+            logger.info("✓ Error message sent")
+                
+        except Exception as err:
+            logger.error(f"❌ Error recovery failed: {err}")
 
 @router.post("/incoming")
 async def handle_incoming_call(

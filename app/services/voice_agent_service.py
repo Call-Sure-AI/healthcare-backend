@@ -63,7 +63,12 @@ class VoiceAgentService:
     
     # app/services/voice_agent_service.py - OPTIMIZED
 
-    async def process_user_speech(self, call_sid: str, user_text: str) -> Dict[str, Any]:
+    async def process_user_speech(
+        self, 
+        call_sid: str, 
+        user_text: str,
+        metrics: 'LatencyMetrics' = None  # ADD THIS
+    ) -> Dict[str, Any]:
         start_time = time.time()
         logger.info(f"Processing: '{user_text}'")
 
@@ -74,39 +79,48 @@ class VoiceAgentService:
             if not session:
                 return {
                     "success": False,
-                    "response": "Session not found. Please start over."
+                    "response": "Session not found."
                 }
             
             conversation_history = session.get("conversation_history", [])
             
-            # Step 1: Get LLM decision
+            # LLM Request with timing
             ai_functions_schema = get_ai_functions()
-            llm_start = time.time()
             
-            first_response = await openai_service.process_user_input_streaming(
+            if metrics:
+                metrics.llm_request_start = time.time()
+            
+            first_response = await openai_service.process_user_input(
                 user_message=user_text,
                 conversation_history=conversation_history,
                 available_functions=ai_functions_schema,
             )
             
-            logger.info(f"⏱️ LLM call: {time.time() - llm_start:.3f}s")
+            if metrics:
+                metrics.llm_first_response = time.time()
+                llm_latency = (metrics.llm_first_response - metrics.llm_request_start) * 1000
+                logger.info(f"⏱️ LLM: {llm_latency:.0f}ms")
             
             if not first_response:
                 return {
                     "success": False,
-                    "response": "I'm having trouble understanding. Please try again."
+                    "response": "I'm having trouble understanding."
                 }
 
-            # Step 2: Handle function call OR direct response
+            # Handle function call
             if first_response.get("function_call"):
                 function_call = first_response["function_call"]
                 function_name = function_call["name"]
                 function_args = function_call["arguments"]
                 tool_call_id = function_call["id"]
 
-                logger.info(f"🔧 Tool: {function_name}")
+                logger.info(f"🔧 Calling tool: {function_name}")
                 
-                # Save assistant's tool call message
+                if metrics:
+                    metrics.tool_name = function_name
+                    metrics.tool_execution_start = time.time()
+                
+                # Save tool call message
                 tool_call_message = {
                     "role": "assistant",
                     "content": None,
@@ -122,9 +136,12 @@ class VoiceAgentService:
                 redis_service.append_to_conversation(call_sid, "assistant", tool_call_message)
                 
                 # Execute function
-                tool_start = time.time()
                 function_result = self.ai_tools.execute_function(function_name, function_args)
-                logger.info(f"⏱️ Tool execution: {time.time() - tool_start:.3f}s")
+                
+                if metrics:
+                    metrics.tool_execution_end = time.time()
+                    tool_latency = (metrics.tool_execution_end - metrics.tool_execution_start) * 1000
+                    logger.info(f"⏱️ Tool: {tool_latency:.0f}ms")
                 
                 # Save tool result
                 tool_result_message = {
@@ -135,15 +152,21 @@ class VoiceAgentService:
                 }
                 redis_service.append_to_conversation(call_sid, "tool", tool_result_message)
                 
-                # Get final response
+                # Second LLM call
                 session = redis_service.get_session(call_sid)
                 updated_history = session.get("conversation_history", [])
                 
-                final_llm_start = time.time()
+                if metrics:
+                    metrics.llm2_request_start = time.time()
+                
                 final_response = await openai_service.chat_completion(
                     messages=openai_service.build_conversation_messages(updated_history, include_system=True),
                 )
-                logger.info(f"⏱️ Final LLM: {time.time() - final_llm_start:.3f}s")
+                
+                if metrics:
+                    metrics.llm2_complete = time.time()
+                    llm2_latency = (metrics.llm2_complete - metrics.llm2_request_start) * 1000
+                    logger.info(f"⏱️ LLM2: {llm2_latency:.0f}ms")
                 
                 if final_response and final_response.choices:
                     response_text = final_response.choices[0].message.content
@@ -154,8 +177,11 @@ class VoiceAgentService:
                     redis_service.append_to_conversation(call_sid, "assistant", response_text)
                     success = False
                 
+                if metrics:
+                    metrics.llm_complete = time.time()
+                
                 total_time = time.time() - start_time
-                logger.info(f"⏱️ TOTAL (with tool): {total_time:.3f}s")
+                logger.info(f"⏱️ TOTAL (with tool): {total_time*1000:.0f}ms")
                 
                 return {
                     "success": success,
@@ -166,15 +192,18 @@ class VoiceAgentService:
                 }
             
             else:
-                # Direct response (no tool call)
+                # Direct response
                 response_text = first_response.get("response")
                 if not response_text:
                     response_text = "I'm sorry, I didn't quite understand. Could you rephrase?"
                 
                 redis_service.append_to_conversation(call_sid, "assistant", response_text)
                 
+                if metrics:
+                    metrics.llm_complete = time.time()
+                
                 total_time = time.time() - start_time
-                logger.info(f"⏱️ TOTAL (direct): {total_time:.3f}s")
+                logger.info(f"⏱️ TOTAL (direct): {total_time*1000:.0f}ms")
                 
                 return {
                     "success": True,
@@ -183,7 +212,7 @@ class VoiceAgentService:
                 }
 
         except Exception as e:
-            logger.error(f"Error: {e}", exc_info=True)
+            logger.error(f"❌ Error: {e}", exc_info=True)
             fallback = "I apologize, I encountered an error. Please try again."
             
             try:
