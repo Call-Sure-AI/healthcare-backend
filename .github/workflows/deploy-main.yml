@@ -1,9 +1,9 @@
-name: Deploy Dev to Development
+name: Deploy Main to Production
 
 on:
   push:
     branches:
-      - dev
+      - main
 
 jobs:
   deploy:
@@ -25,23 +25,23 @@ jobs:
           ssh -o StrictHostKeyChecking=no -i private_key.pem ${USER}@${HOST} << 'ENDSSH'
             set -e
             
-            echo "=== Starting Development Deployment ==="
+            echo "=== Starting Production Deployment ==="
             cd ~/healthcare-backend
             
             # Pull latest code
-            echo "Pulling latest code from dev branch..."
+            echo "Pulling latest code from main branch..."
             git fetch origin
-            git checkout dev
-            git pull origin dev
+            git checkout main
+            git pull origin main
             
-            # Stop and remove existing dev container
-            echo "Stopping dev container..."
-            docker stop healthcare-backend-dev 2>/dev/null || true
-            docker rm healthcare-backend-dev 2>/dev/null || true
+            # Stop and remove existing production container
+            echo "Stopping production container..."
+            docker stop healthcare-backend 2>/dev/null || true
+            docker rm healthcare-backend 2>/dev/null || true
             
-            # Remove old dev images (keep last 2)
-            echo "Cleaning up old dev images..."
-            docker images healthcare-backend-app:dev --format "{{.ID}} {{.CreatedAt}}" | \
+            # Remove old production images (keep last 2)
+            echo "Cleaning up old production images..."
+            docker images healthcare-backend-app --format "{{.ID}} {{.CreatedAt}}" | \
               tail -n +3 | \
               awk '{print $1}' | \
               xargs -r docker rmi -f 2>/dev/null || true
@@ -50,36 +50,36 @@ jobs:
             echo "Removing dangling images..."
             docker image prune -f
             
-            # Build new dev image with no cache
-            echo "Building dev image with no cache..."
-            docker build --no-cache -t healthcare-backend-app:dev .
+            # Build new production image with no cache
+            echo "Building production image with no cache..."
+            docker build --no-cache -t healthcare-backend-app:latest .
             
-            # Run dev container
-            echo "Starting dev container..."
+            # Run production container
+            echo "Starting production container..."
             docker run -d \
-              --name healthcare-backend-dev \
+              --name healthcare-backend \
               --env-file .env \
               --memory="300m" \
               --cpus="0.8" \
-              -p 127.0.0.1:8001:8000 \
+              -p 127.0.0.1:8000:8000 \
               --network healthcare-backend_healthcare-network \
               --restart unless-stopped \
               --health-cmd="curl -f http://localhost:8000/api/health || exit 1" \
               --health-interval=30s \
               --health-timeout=10s \
               --health-retries=3 \
-              healthcare-backend-app:dev
+              healthcare-backend-app:latest
             
             # Wait for container to be healthy
             echo "Waiting for container to be healthy..."
-            timeout 60 sh -c 'until docker inspect --format="{{.State.Health.Status}}" healthcare-backend-dev | grep -q healthy; do sleep 2; done' || {
+            timeout 60 sh -c 'until docker inspect --format="{{.State.Health.Status}}" healthcare-backend | grep -q healthy; do sleep 2; done' || {
               echo "Container failed to become healthy"
-              docker logs healthcare-backend-dev --tail 50
+              docker logs healthcare-backend --tail 50
               exit 1
             }
             
-            echo "=== Development Deployment Complete ==="
-            docker ps -a | grep healthcare-backend-dev
+            echo "=== Production Deployment Complete ==="
+            docker ps -a | grep healthcare-backend
             
           ENDSSH
           
