@@ -98,7 +98,7 @@ class OpenAIService:
         compress: bool = True
     ) -> List[Dict[str, str]]:
         """
-        ⚡ FIXED: Smart compression that preserves tool call chains
+        ⚡ BULLETPROOF: Clean tool chains + smart compression
         """
         messages = []
         
@@ -119,47 +119,59 @@ class OpenAIService:
                 "content": enhanced_system_prompt
             })
 
-        # ⚡ FIXED: Smart compression that maintains tool call integrity
-        if compress and len(conversation_history) > 12:
-            keep_from = len(conversation_history) - 12
+        # ⚡ STEP 1: Clean conversation history (remove orphaned tool messages)
+        cleaned_history = []
+        i = 0
+        while i < len(conversation_history):
+            msg = conversation_history[i]
+            role = msg.get("role")
             
-            # ⚡ CRITICAL: Find safe boundary that doesn't break tool chains
-            for i in range(keep_from, max(0, keep_from - 10), -1):
-                msg = conversation_history[i]
-                role = msg.get("role")
+            # If we find a 'tool' message, verify it has a preceding 'assistant' with 'tool_calls'
+            if role == "tool":
+                # Look backwards for the assistant message
+                found_tool_call = False
+                for j in range(len(cleaned_history) - 1, -1, -1):
+                    prev_msg = cleaned_history[j]
+                    if prev_msg.get("role") == "assistant" and prev_msg.get("tool_calls"):
+                        found_tool_call = True
+                        break
+                    # Stop if we hit another assistant or user message
+                    if prev_msg.get("role") in ["assistant", "user"]:
+                        break
                 
-                # Safe boundaries: user or system messages
-                if role in ["user", "system"]:
-                    keep_from = i
+                if found_tool_call:
+                    # Valid tool message - keep it
+                    cleaned_history.append(msg)
+                else:
+                    # Orphaned tool message - skip it
+                    print(f"⚠️ Skipping orphaned tool message at index {i}")
+            else:
+                # Not a tool message - keep it
+                cleaned_history.append(msg)
+            
+            i += 1
+        
+        # ⚡ STEP 2: Smart compression (keep last 20 messages)
+        if compress and len(cleaned_history) > 20:
+            # Start from position that keeps 20 messages
+            keep_from = len(cleaned_history) - 20
+            
+            # Find safe boundary (user or system message)
+            for j in range(keep_from, max(0, keep_from - 5), -1):
+                if cleaned_history[j].get("role") in ["user", "system"]:
+                    keep_from = j
                     break
-                
-                # Also safe: assistant without tool_calls
-                if role == "assistant" and not msg.get("tool_calls"):
-                    keep_from = i
-                    break
             
-            # ⚡ NEW: Validate we're not breaking a tool chain
-            # If we're starting with a 'tool' message, go back further
-            if keep_from < len(conversation_history):
-                first_msg = conversation_history[keep_from]
-                if first_msg.get("role") == "tool":
-                    # Go back to find the assistant message with tool_calls
-                    for i in range(keep_from - 1, max(0, keep_from - 5), -1):
-                        if conversation_history[i].get("role") == "assistant":
-                            if conversation_history[i].get("tool_calls"):
-                                keep_from = i
-                                break
-            
-            compressed_history = conversation_history[keep_from:]
-            
-            # ⚡ FINAL VALIDATION: Remove orphaned tool messages at the start
-            while compressed_history and compressed_history[0].get("role") == "tool":
-                print(f"⚠️ Removing orphaned tool message at start")
-                compressed_history.pop(0)
-            
-            messages.extend(compressed_history)
+            final_history = cleaned_history[keep_from:]
         else:
-            messages.extend(conversation_history)
+            final_history = cleaned_history
+        
+        # ⚡ STEP 3: Final validation - ensure no orphaned tool at start
+        while final_history and final_history[0].get("role") == "tool":
+            print(f"⚠️ Removing orphaned tool message at start of final history")
+            final_history.pop(0)
+        
+        messages.extend(final_history)
         
         return messages
     
