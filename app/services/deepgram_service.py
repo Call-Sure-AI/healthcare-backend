@@ -1,248 +1,323 @@
-# app/config/voice_config.py - PRODUCTION-READY (ALL SCENARIOS)
+# app/services/deepgram_service.py - ULTRA OPTIMIZED FOR INDIAN ENGLISH
 
+import asyncio
+import base64
+import logging
 import os
-from dotenv import load_dotenv
-from datetime import datetime
+from typing import Callable, Awaitable, Dict
+from app.config.voice_config import voice_config
+from deepgram import DeepgramClient, DeepgramClientOptions, LiveTranscriptionEvents, LiveOptions
+import traceback
+import time
 
-load_dotenv()
+logger = logging.getLogger(__name__)
+
+TranscriptCallback = Callable[[str, float], Awaitable[None]]
+InterruptionCallback = Callable[[], Awaitable[None]]
 
 
-class VoiceAgentConfig:
-    """Voice agent configuration settings"""
-
-    TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
-    TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
-    TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER")
-
-    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-    OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
-    OPENAI_FAST_MODEL = os.getenv("OPENAI_FAST_MODEL", "gpt-4o-mini")
-    OPENAI_VOICE = os.getenv("OPENAI_VOICE")
-    OPENAI_TTS_MODEL = os.getenv("OPENAI_TTS_MODEL")
-    OPENAI_STT_MODEL = os.getenv("OPENAI_STT_MODEL")
-
-    ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
-    ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID")
-
-    DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
-    VOICE_MODEL: str = os.getenv("VOICE_MODEL")
-    CALL_SESSION_TTL = int(os.getenv("CALL_SESSION_TTL"))
-    MAX_CALL_DURATION = int(os.getenv("MAX_CALL_DURATION"))
-    MAX_RETRY_ATTEMPTS = int(os.getenv("MAX_RETRY_ATTEMPTS"))
-
-    QDRANT_HOST = os.getenv("QDRANT_HOST")
-    QDRANT_PORT = int(os.getenv("QDRANT_PORT", 6333))
-    QDRANT_COLLECTION_NAME = os.getenv("QDRANT_COLLECTION_NAME")
-    QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
-    EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME")
-
-    VOICE_AGENT_ENABLED = os.getenv("VOICE_AGENT_ENABLED").lower() == "true"
-    ENABLE_CALL_RECORDING = os.getenv("ENABLE_CALL_RECORDING").lower() == "true"
-    ENABLE_SMS_CONFIRMATION = os.getenv("ENABLE_SMS_CONFIRMATION").lower() == "true"
-
-    CLINIC_NAME = os.getenv("CLINIC_NAME", "HealthCare Clinic")
-    CLINIC_ADDRESS = os.getenv("CLINIC_ADDRESS", "123 Health Street")
-    CLINIC_PHONE = os.getenv("CLINIC_PHONE", TWILIO_PHONE_NUMBER)
-
-    # ⚡ PRODUCTION-READY: Handles ALL hospital call scenarios
-    SYSTEM_PROMPT = f"""You are a professional medical receptionist for {CLINIC_NAME}. Help callers with any request naturally and efficiently.
-
-**AVAILABLE TOOLS:**
-- search_doctor_information: Find specific doctor
-- get_available_doctors: Get doctor recommendations  
-- get_doctor_schedule: Check doctor availability
-- get_available_slots: Get appointment times
-- get_appointment_details: Check existing appointments
-- book_appointment_in_hour_range: Book appointments
-
-**CALL HANDLING (Identify Intent First):**
-
-**1. NEW APPOINTMENT BOOKING:**
-Flow: Symptoms → Brief questions → Specialist types → get_available_doctors → Date/time → Book
-User: "I need a doctor" / "I have fever" / "Book appointment"
-You: Understand symptoms → Suggest specialists → Find doctors → Book
-
-**2. CHECK EXISTING APPOINTMENT:**
-User: "Where is my appointment?" / "What time is my booking?" / "When is my appointment?"
-You: [Call get_appointment_details] "May I have your name and phone number?"
-
-**3. RESCHEDULE APPOINTMENT:**
-User: "Change my appointment" / "Reschedule" / "Different time"
-You: [Call get_appointment_details] → Get new date/time → Book new slot
-Say: "Let me check your current appointment. Name and phone?"
-
-**4. CANCEL APPOINTMENT:**
-User: "Cancel my appointment" / "Cancel booking"
-You: [Call get_appointment_details] → Confirm details → Process cancellation
-Say: "I can help cancel. Name and phone number?"
-
-**5. SPECIFIC DOCTOR REQUEST:**
-User: "Book with Dr. Sharma" / "I want Dr. Patel"
-You: [Call search_doctor_information] → Check availability → Book
-Say: "Sure! Dr. Sharma. What brings you in?"
-
-**6. DOCTOR AVAILABILITY CHECK:**
-User: "Is Dr. Sharma available tomorrow?" / "When can I see Dr. Patel?"
-You: [Call get_doctor_schedule] → Show dates
-Say: "Let me check Dr. Sharma's availability..."
-
-**7. URGENT/SAME-DAY REQUEST:**
-User: "I need to see someone today" / "Urgent" / "Emergency"
-You: [Call get_available_doctors immediately] → Priority booking
-Say: "I'll find someone available today. What's the issue?"
-
-**8. GENERAL INFORMATION:**
-User: "What are your hours?" / "Where are you located?" / "What's your address?"
-You: Provide info directly (no tools needed)
-- Hours: 6 AM - 11 PM daily
-- Address: {CLINIC_ADDRESS}
-- Phone: {CLINIC_PHONE}
-
-**9. EMERGENCY SITUATIONS:**
-User mentions: "Chest pain" / "Can't breathe" / "Severe bleeding" / "Unconscious"
-You: "This sounds urgent. Please call 911 or visit the nearest emergency room immediately. Do you need help calling 911?"
-
-**10. FOLLOW-UP APPOINTMENTS:**
-User: "My follow-up" / "Second visit" / "Post-surgery checkup"
-You: [Call get_appointment_details] → Check history → Book follow-up with same doctor
-
-**11. CONFUSED/BROWSING:**
-User: "Just calling to check" / "I don't know" / "Maybe"
-You: "No problem! Are you looking to book an appointment or check an existing one?"
-
-**12. SECOND OPINION:**
-User: "I want another doctor" / "Different doctor" / "Second opinion"
-You: "Of course! What type of specialist are you looking for?"
-
-**CONTEXT MATCHING (CRITICAL for Indian accents):**
-When you JUST gave options and user responds unclearly:
-
-STT Common Errors:
-- "Plus"/"Pliss"/"Puriya" → "Priya"
-- "Ria"/"Reya"/"Yakupol" → "Rhea"
-- "70"/"Seventeen" → "17th"
-- "80"/"Eighteen" → "18th"
-- "First"/"1" → 1st option
-- "Second"/"2" → 2nd option
-
-Always match to recent context, don't ask "what do you mean?"
-
-Example:
-You: "Dr. Priya or Dr. Rhea?"
-User: "Plus" → You: "Perfect! Dr. Priya. When?"
-
-You: "14th, 17th, or 18th?"
-User: "70" → You: "Great! 17th. What time?"
-
-**TIME & SCHEDULING:**
-- Clinic hours: 6 AM - 11 PM daily
-- If vague ("morning"): Ask specific hour ("9 AM or 10 AM?")
-- If unavailable: Suggest alternatives ("2 PM is full. How about 3 PM or 4 PM?")
-- Never confirm time without verifying availability
-
-**CONVERSATION STYLE:**
-- Warm, professional, helpful
-- Max 30 words per response
-- One question at a time
-- Natural language (not robotic)
-- Use tools for real data only
-- Be efficient (don't waste caller's time)
-
-**INFORMATION GATHERING:**
-For appointments, collect:
-1. Patient name
-2. Phone number  
-3. Reason for visit
-4. Preferred doctor (if any)
-5. Preferred date/time
-
-Ask these naturally, not like a form.
-
-**EXAMPLES:**
-
-Example 1: New booking
-User: "I have a headache"
-You: "How long have you had it? Any other symptoms?"
-User: "2 days, nausea"
-You: "For that, I'd recommend: Neurologist or General Medicine. Preference?"
-User: "General"
-You: [Call get_available_doctors] "Dr. Desai available. When works for you?"
-
-Example 2: Check appointment
-User: "Where's my appointment?"
-You: "I'll check for you. May I have your name and phone number?"
-User: "Raj Kumar, 9876543210"
-You: [Call get_appointment_details] "Your appointment is with Dr. Sharma on Nov 14 at 2 PM."
-
-Example 3: Reschedule
-User: "I need to change my appointment"
-You: "Sure! Name and phone to find your booking?"
-User: "Priya, 9123456789"
-You: [Call get_appointment_details] "You're scheduled Nov 14, 2 PM. What date works better?"
-
-Example 4: Cancel
-User: "Cancel my appointment"
-You: "I can help. Name and phone number?"
-User: "Amit, 9988776655"
-You: [Call get_appointment_details] "Appointment Nov 15, 3 PM with Dr. Patel. Confirm cancellation?"
-
-Example 5: Urgent
-User: "I need to see someone today"
-You: "What's the issue?"
-User: "Severe stomach pain"
-You: [Call get_available_doctors("urgent stomach pain")] "Dr. Desai available at 3 PM today. Book it?"
-
-Example 6: General info
-User: "What are your hours?"
-You: "We're open 6 AM to 11 PM daily. Need to book an appointment?"
-
-Example 7: Context matching
-You: "Dr. Priya Desai or Dr. Rhea Kapoor?"
-User: "Yakupol"
-You: "Perfect! Booking Dr. Rhea Kapoor. What date works for you?"
-
-Example 8: Emergency
-User: "I'm having chest pain"
-You: "That sounds serious. Please call 911 or go to the nearest ER immediately. This may be an emergency."
-
-Example 9: Specific doctor
-User: "Book me with Dr. Sharma"
-You: "Sure! What brings you in to see Dr. Sharma?"
-
-Example 10: Follow-up
-User: "My follow-up appointment"
-You: "I'll find your previous visit. Name and phone?"
-
-**CRITICAL REMINDERS:**
-- Identify intent FIRST (booking? checking? canceling?)
-- Use appropriate tool for each scenario
-- Be helpful, not rigid
-- Match unclear responses to recent context
-- Stay under 30 words per response
-- One question at a time
-- Natural conversation flow"""
+class DeepgramService:
+    def __init__(
+        self, 
+        on_speech_end_callback: TranscriptCallback,
+        on_interruption_callback: InterruptionCallback = None
+    ):
+        self.dg_connection = None
+        self.final_result = ""
+        self.speech_final = False
+        self._on_speech_end = on_speech_end_callback
+        self._on_interruption = on_interruption_callback
+        self.audio_sent_count = 0
+        self._connection_established = False
+        self._is_speaking = False  # ⚡ NEW: Track if AI is speaking
+        self._last_transcript_time = 0
+        
+        logger.info("=" * 80)
+        logger.info("DeepgramService -> Initializing SDK 3.7.2 (OPTIMIZED)")
+        logger.info("=" * 80)
+        self._initialize_connection()
     
-    @classmethod
-    def validate_config(cls) -> bool:
-        """Validate required configuration"""
-        required_vars = [
-            ("TWILIO_ACCOUNT_SID", cls.TWILIO_ACCOUNT_SID),
-            ("TWILIO_AUTH_TOKEN", cls.TWILIO_AUTH_TOKEN),
-            ("TWILIO_PHONE_NUMBER", cls.TWILIO_PHONE_NUMBER),
-            ("OPENAI_API_KEY", cls.OPENAI_API_KEY),
-            ("ELEVENLABS_API_KEY", cls.ELEVENLABS_API_KEY),
-            ("DEEPGRAM_API_KEY", cls.DEEPGRAM_API_KEY),
-        ]
+    def _initialize_connection(self):        
+        api_key = getattr(voice_config, 'DEEPGRAM_API_KEY', None)
+        if not api_key:
+            logger.error("DEEPGRAM_API_KEY not set")
+            return
         
-        missing = [name for name, value in required_vars if not value]
+        logger.info(f"API Key: {api_key[:10]}...{api_key[-4:]}")
         
-        if missing:
-            print(f"Missing required environment variables: {', '.join(missing)}")
+        try:         
+            logger.info("Imported SDK 3.x components")
+
+            config = DeepgramClientOptions(api_key=api_key)
+            self.client = DeepgramClient("", config)
+            self.LiveTranscriptionEvents = LiveTranscriptionEvents
+            self.LiveOptions = LiveOptions
+            
+            logger.info("DeepgramClient created")
+            
+            self.initialized = True
+            
+            logger.info("=" * 80)
+            logger.info("DEEPGRAM INITIALIZED")
+            logger.info("=" * 80)
+            
+        except Exception as e:
+            logger.error("=" * 80)
+            logger.error(f"FAILED: {e}")
+            logger.error("=" * 80)
+            traceback.print_exc()
+            self.initialized = False
+    
+    def set_speaking_state(self, is_speaking: bool):
+        """⚡ NEW: Track when AI is speaking (for interruption detection)"""
+        self._is_speaking = is_speaking
+        if is_speaking:
+            logger.debug("🎤 AI started speaking")
+        else:
+            logger.debug("🎤 AI stopped speaking")
+    
+    async def connect(self) -> bool:
+        if not hasattr(self, 'initialized') or not self.initialized:
+            logger.error("Client not initialized")
             return False
         
-        print("✨ Voice agent configuration validated (PRODUCTION-READY)")
-        return True
+        try:
+            logger.info("=" * 80)
+            logger.info("CONNECTING TO DEEPGRAM (OPTIMIZED FOR INDIAN ENGLISH)")
+            logger.info("=" * 80)
+
+            self.dg_connection = self.client.listen.asynclive.v("1")
+
+            logger.info("Registering async handlers...")
+
+            async def on_open_wrapper(*args, **kwargs):
+                await self._on_open(*args, **kwargs)
+            
+            async def on_transcript_wrapper(*args, **kwargs):
+                await self._on_transcript(*args, **kwargs)
+            
+            async def on_error_wrapper(*args, **kwargs):
+                await self._on_error(*args, **kwargs)
+            
+            async def on_close_wrapper(*args, **kwargs):
+                await self._on_close(*args, **kwargs)
+            
+            async def on_metadata_wrapper(*args, **kwargs):
+                await self._on_metadata(*args, **kwargs)
+            
+            async def on_utterance_end_wrapper(*args, **kwargs):
+                await self._on_utterance_end(*args, **kwargs)
+            
+            self.dg_connection.on(self.LiveTranscriptionEvents.Open, on_open_wrapper)
+            self.dg_connection.on(self.LiveTranscriptionEvents.Transcript, on_transcript_wrapper)
+            self.dg_connection.on(self.LiveTranscriptionEvents.Error, on_error_wrapper)
+            self.dg_connection.on(self.LiveTranscriptionEvents.Close, on_close_wrapper)
+            self.dg_connection.on(self.LiveTranscriptionEvents.Metadata, on_metadata_wrapper)
+            self.dg_connection.on(self.LiveTranscriptionEvents.UtteranceEnd, on_utterance_end_wrapper)
+            
+            logger.info("Async handlers registered")
+
+            # ⚡ ULTRA OPTIMIZED CONFIG FOR INDIAN ENGLISH
+            options = self.LiveOptions(
+                # Model & Language
+                model="nova-2-phonecall",
+                language="en-IN",
+                
+                # Audio Format
+                encoding="mulaw",
+                sample_rate=8000,
+                channels=1,
+                
+                # Formatting
+                smart_format=True,
+                punctuate=True,
+                filler_words=False,          # ⚡ DISABLED - causes issues
+                diarize=False,
+                
+                # Timing
+                interim_results=True,
+                endpointing=400,             # ⚡ Balanced (was 600)
+                utterance_end_ms=1500,       # ⚡ Faster (was 1800)
+                
+                # Additional
+                numerals=True,
+                profanity_filter=False,
+                search=False,                # ⚡ NEW: Disable search
+                redact=False,                # ⚡ NEW: Disable redaction
+            )
+            
+            logger.info(f"✨ Config: {options.model}, {options.language}, {options.encoding}, {options.sample_rate}Hz")
+            logger.info(f"✨ Endpointing: {options.endpointing}ms, Utterance: {options.utterance_end_ms}ms")
+
+            logger.info("Starting connection...")
+            await self.dg_connection.start(options)
+            
+            logger.info("=" * 80)
+            logger.info("CONNECTED! (OPTIMIZED)")
+            logger.info("=" * 80)
+            return True
+            
+        except Exception as e:
+            logger.error("=" * 80)
+            logger.error(f"CONNECTION FAILED: {e}")
+            logger.error("=" * 80)
+            traceback.print_exc()
+            return False
+    
+    async def _on_open(self, *args, **kwargs):
+        self._connection_established = True
+        logger.info("=" * 80)
+        logger.info("WEBSOCKET OPENED!")
+        logger.info("=" * 80)
+    
+    async def _on_metadata(self, *args, **kwargs):
+        logger.debug("Received metadata from Deepgram")
+    
+    async def _on_utterance_end(self, *args, **kwargs):
+        """⚡ OPTIMIZED: Better utterance end detection"""
+        if self.final_result.strip():
+            final_text = self.final_result.strip()
+            speech_end_time = time.time()
+            
+            logger.info("=" * 80)
+            logger.info("UTTERANCE END!")
+            logger.info(f"USER SAID: '{final_text}'")
+            logger.info("=" * 80)
+            
+            await self._on_speech_end(final_text, speech_end_time)
+            self.final_result = ""
+    
+    async def _on_transcript(self, *args, **kwargs):
+        """⚡ OPTIMIZED: Better transcript handling + interruption detection"""
+        try:
+            result = kwargs.get('result') or (args[0] if args else None)
+            if not result:
+                return
+
+            text = ''
+            if hasattr(result, 'channel'):
+                channel = result.channel
+                if hasattr(channel, 'alternatives') and channel.alternatives:
+                    text = channel.alternatives[0].transcript or ''
+            
+            if not text.strip():
+                return
+
+            is_final = getattr(result, 'is_final', False)
+            current_time = time.time()
+            
+            # ⚡ INTERRUPTION DETECTION
+            # If AI is speaking and user starts talking, trigger interruption
+            if self._is_speaking and text.strip() and not is_final:
+                # Check if this is new speech (not just noise)
+                if len(text.split()) >= 2:  # At least 2 words
+                    if current_time - self._last_transcript_time > 0.5:  # 500ms gap
+                        logger.warning("🚨 INTERRUPTION DETECTED!")
+                        if self._on_interruption:
+                            await self._on_interruption()
+                        self._is_speaking = False  # Reset state
+            
+            self._last_transcript_time = current_time
+            
+            if is_final:
+                self.final_result += f" {text}"
+                
+                logger.info("─" * 80)
+                logger.info(f"FINAL: '{text}'")
+                logger.info(f"TOTAL: '{self.final_result.strip()}'")
+                logger.info("─" * 80)
+
+                speech_final = getattr(result, 'speech_final', False)
+                
+                if speech_final:
+                    final_text = self.final_result.strip()
+                    speech_end_time = time.time()
+                    
+                    logger.info("=" * 80)
+                    logger.info("SPEECH FINAL!")
+                    logger.info(f"USER SAID: '{final_text}'")
+                    logger.info("=" * 80)
+
+                    await self._on_speech_end(final_text, speech_end_time)
+                    
+                    self.final_result = ""
+            else:
+                # Log interim results less frequently
+                if len(text.split()) >= 3:  # Only log substantial interim results
+                    logger.debug(f"Interim: '{text}'")
+                    
+        except Exception as e:
+            logger.error(f"Transcript error: {e}")
+            traceback.print_exc()
+    
+    async def _on_error(self, *args, **kwargs):
+        error = kwargs.get('error') or (args[0] if args else 'Unknown')
+        logger.error("=" * 80)
+        logger.error(f"ERROR: {error}")
+        logger.error("=" * 80)
+    
+    async def _on_close(self, *args, **kwargs):
+        logger.info(f"Connection closed ({self.audio_sent_count} chunks)")
+        self._connection_established = False
+    
+    async def send_audio(self, audio_chunk: bytes):
+        if self.dg_connection:
+            try:
+                await self.dg_connection.send(audio_chunk)
+                self.audio_sent_count += 1
+                
+                if self.audio_sent_count % 100 == 0:
+                    logger.info(f"Sent {self.audio_sent_count} chunks")
+                    
+            except Exception as e:
+                if self.audio_sent_count < 3:
+                    logger.error(f"Send error: {e}")
+    
+    def send(self, payload: str):
+        if not self.dg_connection:
+            if self.audio_sent_count == 0:
+                logger.error("Not connected!")
+            return
+        
+        try:
+            audio_bytes = base64.b64decode(payload)
+            asyncio.create_task(self.send_audio(audio_bytes))
+        except Exception as e:
+            logger.error(f"Decode error: {e}")
+    
+    async def close(self):
+        if self.dg_connection:
+            try:
+                logger.info(f"Closing ({self.audio_sent_count} chunks)")
+                await self.dg_connection.finish()
+                self.dg_connection = None
+            except Exception as e:
+                logger.error(f"Close error: {e}")
+    
+    def is_ready(self) -> bool:
+        return self.dg_connection is not None
 
 
-# Global instance
-voice_config = VoiceAgentConfig()
+class DeepgramManager:
+    
+    def __init__(self):
+        self._connections: Dict[str, DeepgramService] = {}
+        logger.info("DeepgramManager initialized")
+    
+    def create_connection(
+        self,
+        call_sid: str,
+        on_speech_end_callback: TranscriptCallback,
+        on_interruption_callback: InterruptionCallback = None
+    ) -> DeepgramService:
+        """⚡ UPDATED: Support interruption callback"""
+        logger.info(f"Creating connection: {call_sid}")
+        service = DeepgramService(on_speech_end_callback, on_interruption_callback)
+        self._connections[call_sid] = service
+        return service
+    
+    async def remove_connection(self, call_sid: str):
+        if call_sid in self._connections:
+            logger.info(f"Removing: {call_sid}")
+            service = self._connections.pop(call_sid)
+            await service.close()
