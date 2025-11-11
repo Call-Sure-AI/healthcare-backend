@@ -1,4 +1,4 @@
-# app/routes/voice_agent.py - COMPLETE OPTIMIZED VERSION WITH ABBREVIATION FIX
+# app/routes/voice_agent.py - FIXED: Wait for complete response
 
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect, Form, Query, Depends
 from fastapi.responses import Response, JSONResponse
@@ -29,21 +29,20 @@ router = APIRouter(prefix="/voice", tags=["Voice Agent"])
 
 call_context: Dict[str, Dict[str, Any]] = {}
 
-# ⚡ NEW: Track active TTS tasks for interruption
+# ⚡ Track active TTS tasks for interruption
 active_tts_tasks = {}
 
 
-# ⚡ HELPER FUNCTION - Updated with interruption support
 async def _generate_and_stream_audio(
     text: str,
     stream_service: StreamService,
     tts_service: any,
     metrics: 'LatencyMetrics',
     is_partial: bool = False,
-    call_sid: str = None  # ⚡ NEW: For interruption tracking
+    call_sid: str = None
 ) -> None:
     """
-    ⚡ Helper function to generate and stream audio with interruption support
+    Helper function to generate and stream audio with interruption support
     """
     if not text or not text.strip():
         return
@@ -56,7 +55,7 @@ async def _generate_and_stream_audio(
         
         chunk_count = 0
         
-        # ⚡ Track this TTS task
+        # Track this TTS task
         task_id = str(uuid.uuid4())[:8]
         if call_sid:
             if call_sid not in active_tts_tasks:
@@ -65,7 +64,7 @@ async def _generate_and_stream_audio(
         
         try:
             async for audio_b64 in tts_service.generate(text):
-                # ⚡ CHECK FOR INTERRUPTION
+                # Check for interruption
                 if call_sid and task_id not in active_tts_tasks.get(call_sid, set()):
                     logger.warning(f"🚨 TTS task {task_id} cancelled due to interruption")
                     break
@@ -82,7 +81,7 @@ async def _generate_and_stream_audio(
                     
                     await stream_service.send_audio_chunk(audio_b64, metrics)
         finally:
-            # ⚡ Clean up task tracking
+            # Clean up task tracking
             if call_sid and call_sid in active_tts_tasks:
                 active_tts_tasks[call_sid].discard(task_id)
         
@@ -97,21 +96,20 @@ async def _generate_and_stream_audio(
         traceback.print_exc()
 
 
-# ⚡ NEW: Interruption handler
 async def handle_interruption(call_sid: str):
     """
-    ⚡ NEW: Handle user interruption while AI is speaking
+    Handle user interruption while AI is speaking
     """
     try:
         logger.warning("🚨 INTERRUPTION: User started speaking while AI was talking")
         
-        # 1. Cancel all active TTS tasks
+        # Cancel all active TTS tasks
         if call_sid in active_tts_tasks:
             tasks_to_cancel = active_tts_tasks[call_sid].copy()
             logger.info(f"🚨 Cancelling {len(tasks_to_cancel)} TTS tasks")
             active_tts_tasks[call_sid].clear()
         
-        # 2. Clear audio buffer
+        # Clear audio buffer
         context = call_context.get(call_sid)
         if context:
             stream_service = context.get("stream_service")
@@ -119,7 +117,7 @@ async def handle_interruption(call_sid: str):
                 await stream_service.clear()
                 logger.info("🧹 Audio buffer cleared")
         
-        # 3. Update Deepgram state
+        # Update Deepgram state
         context = call_context.get(call_sid)
         if context:
             deepgram_service = context.get("deepgram")
@@ -141,7 +139,7 @@ async def handle_full_transcript(
     speech_end_time: float = None
 ):
     """
-    ⚡ FIXED: Better sentence detection to prevent choppy audio
+    ⚡ FIXED: Wait for complete response - no early streaming (smooth audio)
     """
     interaction_id = str(uuid.uuid4())[:8]
     metrics = latency_tracker.start_interaction(call_sid, interaction_id)
@@ -167,89 +165,30 @@ async def handle_full_transcript(
     
     try:
         text_buffer = ""
-        sentence_buffer = ""
         response_complete = False
         ai_result = None
         
-        tts_started = False
-        tts_task = None
-        
-        # ⚡ HELPER: Check if this is a real sentence ending
-        def is_real_sentence_end(text: str) -> bool:
-            """Check if text ends with real sentence ending (not abbreviation)"""
-            text = text.strip()
-            if not text:
-                return False
-            
-            # Common abbreviations that should NOT trigger sentence end
-            abbreviations = ['Dr.', 'Mr.', 'Mrs.', 'Ms.', 'Sr.', 'Jr.', 'Prof.', 'St.']
-            
-            # Check if ends with sentence punctuation
-            if text.endswith(('.', '!', '?')):
-                # But not if it's an abbreviation
-                for abbr in abbreviations:
-                    if text.endswith(abbr):
-                        return False
-                return True
-            
-            return False
-        
+        # ⚡ SIMPLIFIED: Collect ALL text first (no early streaming)
         async for chunk_data in agent.process_user_speech_streaming(call_sid, transcript, metrics):
             chunk_type = chunk_data["type"]
             
             if chunk_type == "text":
                 text_chunk = chunk_data["data"]
                 text_buffer += text_chunk
-                sentence_buffer += text_chunk
-                
-                # ⚡ OPTIMIZED: Start TTS after REAL sentence (not abbreviation)
-                if not tts_started:
-                    word_count = len(sentence_buffer.split())
-                    
-                    # Need at least 8 words AND real sentence ending
-                    if word_count >= 8 and is_real_sentence_end(sentence_buffer):
-                        logger.info(f"⚡ Starting TTS after first sentence ({word_count} words)")
-                        tts_started = True
-                        
-                        tts_task = asyncio.create_task(
-                            _generate_and_stream_audio(
-                                sentence_buffer.strip(),
-                                stream_service,
-                                tts_service,
-                                metrics,
-                                is_partial=True,
-                                call_sid=call_sid
-                            )
-                        )
-                        
-                        sentence_buffer = ""
                 
             elif chunk_type == "complete":
                 ai_result = chunk_data["data"]
                 response_complete = True
-                
-                if tts_task:
-                    await tts_task
-                    tts_task = None
-                
-                if sentence_buffer.strip():
-                    await _generate_and_stream_audio(
-                        sentence_buffer.strip(),
-                        stream_service,
-                        tts_service,
-                        metrics,
-                        is_partial=False,
-                        call_sid=call_sid
-                    )
-                
                 break
             
             elif chunk_type == "error":
                 logger.error(f"❌ Streaming error: {chunk_data['data']}")
                 break
         
-        # If response was too short, generate TTS now
-        if not tts_started and text_buffer:
+        # ⚡ NOW generate TTS for COMPLETE response (single smooth audio)
+        if text_buffer.strip():
+            word_count = len(text_buffer.split())
+            logger.info(f"⚡ Generating TTS for complete response ({word_count} words)")
             await _generate_and_stream_audio(
                 text_buffer.strip(),
                 stream_service,
@@ -317,26 +256,20 @@ async def handle_incoming_call(
             response.hangup()
             return Response(content=str(response), media_type="application/xml")
         
-        # ⚡ CHECK X-Forwarded-Prefix header (set by Nginx)
         forwarded_prefix = request.headers.get("x-forwarded-prefix", "")
         
-        # Log all headers for debugging
         logger.info(f"X-Forwarded-Prefix: '{forwarded_prefix}'")
         logger.info(f"X-Forwarded-Host: '{request.headers.get('x-forwarded-host', '')}'")
         
-        # Determine environment from X-Forwarded-Prefix
         if forwarded_prefix == "/api/dev":
-            # Development environment
             websocket_url = f"wss://{request.url.hostname}/api/dev/v1/voice/stream?call_sid={CallSid}"
             logger.info("🔧 Environment: DEVELOPMENT")
         else:
-            # Production environment
             websocket_url = f"wss://{request.url.hostname}/api/v1/voice/stream?call_sid={CallSid}"
             logger.info("🏭 Environment: PRODUCTION")
         
         logger.info(f"🔌 WebSocket URL: {websocket_url}")
         
-        # Connect to WebSocket stream
         connect = Connect()
         connect.stream(url=websocket_url)
         response.append(connect)
@@ -361,10 +294,9 @@ async def handle_incoming_call(
 @router.websocket("/stream")
 async def websocket_stream(websocket: WebSocket):
     """
-    ⚡ OPTIMIZED: Handle Twilio Media Stream WebSocket with interruption support
+    Handle Twilio Media Stream WebSocket with interruption support
     """
     
-    # Accept WebSocket
     try:
         logger.info("\n" + "=" * 80)
         logger.info("Accepting WebSocket...")
@@ -375,7 +307,6 @@ async def websocket_stream(websocket: WebSocket):
         traceback.print_exc()
         return
     
-    # Get call_sid from query params or wait for start event
     call_sid = websocket.query_params.get("call_sid")
     logger.info(f"Query parameters: {dict(websocket.query_params)}")
     
@@ -384,7 +315,6 @@ async def websocket_stream(websocket: WebSocket):
         logger.warning("No call_sid in query params, waiting for Twilio events...")
         
         try:
-            # Wait for 'connected' and 'start' events
             max_attempts = 3
             for attempt in range(max_attempts):
                 message = await asyncio.wait_for(
@@ -422,7 +352,6 @@ async def websocket_stream(websocket: WebSocket):
     
     logger.info(f"Call SID validated: {call_sid}")
     
-    # Initialize database
     db = None
     try:
         logger.info("Creating database session...")
@@ -433,7 +362,6 @@ async def websocket_stream(websocket: WebSocket):
         await websocket.close()
         return
     
-    # Initialize services
     stream_service = None
     tts_service = None
     deepgram_manager = None
@@ -460,13 +388,12 @@ async def websocket_stream(websocket: WebSocket):
         
         logger.info("Initializing Deepgram STT...")
         try:
-            # ⚡ UPDATED: Create Deepgram with interruption callback
             deepgram_service = deepgram_manager.create_connection(
                 call_sid=call_sid,
                 on_speech_end_callback=lambda transcript, speech_end_time: asyncio.create_task(
                     handle_full_transcript(call_sid, transcript, stream_service, tts_service, speech_end_time)
                 ),
-                on_interruption_callback=lambda: asyncio.create_task(handle_interruption(call_sid))  # ⚡ NEW
+                on_interruption_callback=lambda: asyncio.create_task(handle_interruption(call_sid))
             )
 
             
@@ -482,7 +409,6 @@ async def websocket_stream(websocket: WebSocket):
             traceback.print_exc()
             deepgram_service = None
         
-        # Store context
         logger.info("Storing context...")
         call_context[call_sid] = {
             "websocket": websocket,
@@ -499,7 +425,6 @@ async def websocket_stream(websocket: WebSocket):
         has_sent_greeting = False
         message_count = 0
         
-        # Process buffered start event if we have it
         if first_message_data and first_message_data.get("event") == "start":
             logger.info("Processing buffered start event...")
             stream_sid = first_message_data.get("streamSid")
@@ -507,14 +432,12 @@ async def websocket_stream(websocket: WebSocket):
             
             logger.info(f"Stream started: {stream_sid}")
             
-            # Update Redis
             try:
                 redis_service.update_session(call_sid, {"stream_sid": stream_sid})
             except Exception as e:
                 logger.error(f"Redis error: {e}")
             
             await stream_service.clear()
-            # Send greeting
             greeting_text = f"Thank you for calling {voice_config.CLINIC_NAME}! How can I help you today?"
             logger.info(f"Sending greeting...")
             
@@ -525,11 +448,9 @@ async def websocket_stream(websocket: WebSocket):
                         greeting_chunks.append(audio_b64)
 
                 if greeting_chunks:
-                    # Combine all chunks into one
                     combined_greeting = b''.join([base64.b64decode(c) for c in greeting_chunks])
                     final_greeting_b64 = base64.b64encode(combined_greeting).decode('ascii')
                                 
-                    # Send as single chunk
                     await stream_service._send_audio(final_greeting_b64)
 
                     logger.info("Greeting sent")
@@ -580,11 +501,9 @@ async def websocket_stream(websocket: WebSocket):
                                     greeting_chunks.append(audio_b64)
 
                             if greeting_chunks:
-                                # Combine all chunks into one
                                 combined_greeting = b''.join([base64.b64decode(c) for c in greeting_chunks])
                                 final_greeting_b64 = base64.b64encode(combined_greeting).decode('ascii')
                                 
-                                # Send as single chunk
                                 await stream_service._send_audio(final_greeting_b64)
 
                             logger.info("✓ Greeting sent")
@@ -624,11 +543,9 @@ async def websocket_stream(websocket: WebSocket):
         traceback.print_exc()
     
     finally:
-        # Cleanup
         logger.info(f"\n{'=' * 80}")
         logger.info("Cleaning up...")
         
-        # ⚡ Clean up TTS tasks
         if call_sid in active_tts_tasks:
             active_tts_tasks[call_sid].clear()
             del active_tts_tasks[call_sid]
