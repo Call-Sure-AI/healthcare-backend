@@ -30,6 +30,50 @@ router = APIRouter(prefix="/voice", tags=["Voice Agent"])
 
 call_context: Dict[str, Dict[str, Any]] = {}
 
+async def _generate_and_stream_audio(
+    text: str,
+    stream_service: StreamService,
+    tts_service: any,
+    metrics: 'LatencyMetrics',
+    is_partial: bool = False
+) -> None:
+    """
+    ⚡ Helper function to generate and stream audio
+    """
+    if not text or not text.strip():
+        return
+    
+    try:
+        if not is_partial and metrics:
+            metrics.tts_request_start = time.time()
+        
+        await stream_service.clear()
+        
+        chunk_count = 0
+        
+        async for audio_b64 in tts_service.generate(text):
+            if audio_b64:
+                if chunk_count == 0 and metrics and not is_partial:
+                    metrics.tts_first_chunk = time.time()
+                    ttfa = (metrics.tts_first_chunk - metrics.transcript_received_at) * 1000
+                    logger.info(f"⚡ First audio in {ttfa:.0f}ms")
+                
+                chunk_count += 1
+                if metrics:
+                    metrics.tts_chunks_count += chunk_count
+                
+                await stream_service.send_audio_chunk(audio_b64, metrics)
+        
+        if not is_partial and metrics:
+            metrics.tts_complete = time.time()
+        
+        if chunk_count == 0:
+            logger.error("❌ No audio generated")
+            
+    except Exception as e:
+        logger.error(f"❌ TTS error: {e}")
+        traceback.print_exc()
+
 async def handle_full_transcript(
     call_sid: str,
     transcript: str,
@@ -38,12 +82,7 @@ async def handle_full_transcript(
     speech_end_time: float = None
 ):
     """
-    ⚡ ULTRA OPTIMIZED: Streaming pipeline
-    
-    Key optimizations:
-    1. Start TTS as soon as we have enough text (sentence buffering)
-    2. Stream audio chunks immediately
-    3. Parallel LLM generation + TTS generation
+    ⚡ ULTRA OPTIMIZED: Streaming pipeline with sentence buffering
     """
     # Start tracking
     interaction_id = str(uuid.uuid4())[:8]
@@ -98,7 +137,7 @@ async def handle_full_transcript(
                         
                         # Start TTS generation in parallel
                         tts_task = asyncio.create_task(
-                            self._generate_and_stream_audio(
+                            _generate_and_stream_audio(  # ⚡ FIX: Remove self.
                                 sentence_buffer.strip(),
                                 stream_service,
                                 tts_service,
@@ -120,7 +159,7 @@ async def handle_full_transcript(
                 
                 # Generate TTS for remaining text
                 if sentence_buffer.strip():
-                    await self._generate_and_stream_audio(
+                    await _generate_and_stream_audio(  # ⚡ FIX: Remove self.
                         sentence_buffer.strip(),
                         stream_service,
                         tts_service,
@@ -136,7 +175,7 @@ async def handle_full_transcript(
         
         # If we never started TTS (response was too short), generate it now
         if not tts_started and text_buffer:
-            await self._generate_and_stream_audio(
+            await _generate_and_stream_audio(  # ⚡ FIX: Remove self.
                 text_buffer.strip(),
                 stream_service,
                 tts_service,
@@ -176,50 +215,6 @@ async def handle_full_transcript(
 
         except Exception as err:
             logger.error(f"❌ Error recovery failed: {err}")
-
-async def _generate_and_stream_audio(
-    text: str,
-    stream_service: StreamService,
-    tts_service: any,
-    metrics: 'LatencyMetrics',
-    is_partial: bool = False
-) -> None:
-    """
-    ⚡ NEW: Helper function to generate and stream audio
-    """
-    if not text or not text.strip():
-        return
-    
-    try:
-        if not is_partial and metrics:
-            metrics.tts_request_start = time.time()
-        
-        await stream_service.clear()
-        
-        chunk_count = 0
-        
-        async for audio_b64 in tts_service.generate(text):
-            if audio_b64:
-                if chunk_count == 0 and metrics and not is_partial:
-                    metrics.tts_first_chunk = time.time()
-                    ttfa = (metrics.tts_first_chunk - metrics.transcript_received_at) * 1000
-                    logger.info(f"⚡ First audio in {ttfa:.0f}ms")
-                
-                chunk_count += 1
-                if metrics:
-                    metrics.tts_chunks_count += chunk_count
-                
-                await stream_service.send_audio_chunk(audio_b64, metrics)
-        
-        if not is_partial and metrics:
-            metrics.tts_complete = time.time()
-        
-        if chunk_count == 0:
-            logger.error("❌ No audio generated")
-            
-    except Exception as e:
-        logger.error(f"❌ TTS error: {e}")
-        traceback.print_exc()
 
 @router.post("/incoming")
 async def handle_incoming_call(
