@@ -141,7 +141,7 @@ async def handle_full_transcript(
     speech_end_time: float = None
 ):
     """
-    ⚡ ULTRA OPTIMIZED: Streaming pipeline with interruption handling
+    ⚡ ULTRA OPTIMIZED: Stream after first complete sentence
     """
     # Start tracking
     interaction_id = str(uuid.uuid4())[:8]
@@ -168,18 +168,13 @@ async def handle_full_transcript(
         deepgram_service.set_speaking_state(True)
     
     try:
-        # ⚡ CRITICAL: Use streaming version
         text_buffer = ""
         sentence_buffer = ""
         response_complete = False
         ai_result = None
         
-        # Track if we've started TTS
         tts_started = False
         tts_task = None
-        
-        # ⚡ SENTENCE BUFFERING: Start TTS when we have 15+ words
-        MIN_WORDS_FOR_TTS = 15
         
         async for chunk_data in agent.process_user_speech_streaming(call_sid, transcript, metrics):
             chunk_type = chunk_data["type"]
@@ -189,17 +184,14 @@ async def handle_full_transcript(
                 text_buffer += text_chunk
                 sentence_buffer += text_chunk
                 
-                # Count words in buffer
-                word_count = len(sentence_buffer.split())
-                
-                # ⚡ START TTS when we have enough words
-                if not tts_started and word_count >= MIN_WORDS_FOR_TTS:
-                    # Check if we have a sentence boundary
-                    if any(punct in sentence_buffer for punct in ['. ', '! ', '? ', '\n']):
-                        logger.info(f"⚡ Starting TTS early ({word_count} words)")
+                # ⚡ OPTIMIZED: Start TTS after first complete sentence
+                if not tts_started:
+                    # Check for sentence ending punctuation
+                    if sentence_buffer.strip().endswith(('.', '!', '?')):
+                        logger.info(f"⚡ Starting TTS after first sentence ({len(sentence_buffer.split())} words)")
                         tts_started = True
                         
-                        # Start TTS generation in parallel
+                        # Start TTS with first complete sentence
                         tts_task = asyncio.create_task(
                             _generate_and_stream_audio(
                                 sentence_buffer.strip(),
@@ -207,7 +199,7 @@ async def handle_full_transcript(
                                 tts_service,
                                 metrics,
                                 is_partial=True,
-                                call_sid=call_sid  # ⚡ Pass call_sid for interruption
+                                call_sid=call_sid
                             )
                         )
                         
@@ -217,7 +209,7 @@ async def handle_full_transcript(
                 ai_result = chunk_data["data"]
                 response_complete = True
                 
-                # If we started TTS early, wait for it to finish
+                # Wait for first TTS to finish
                 if tts_task:
                     await tts_task
                     tts_task = None
@@ -239,7 +231,7 @@ async def handle_full_transcript(
                 logger.error(f"❌ Streaming error: {chunk_data['data']}")
                 break
         
-        # If we never started TTS (response was too short), generate it now
+        # If response was too short (no sentence ending), generate TTS now
         if not tts_started and text_buffer:
             await _generate_and_stream_audio(
                 text_buffer.strip(),
@@ -250,14 +242,14 @@ async def handle_full_transcript(
                 call_sid=call_sid
             )
         
-        # Log the AI response
+        # Log AI response
         if ai_result:
             response_text = ai_result.get("response", "")
             if response_text:
-                preview = response_text[:100] + ('...' if len(response_text) > 100 else '')
+                preview = response_text[:80] + ('...' if len(response_text) > 80 else '')
                 logger.info(f"💬 AI: '{preview}'")
         
-        # ⚡ Reset Deepgram state: AI finished speaking
+        # ⚡ Reset Deepgram state
         if deepgram_service:
             deepgram_service.set_speaking_state(False)
         
@@ -268,7 +260,7 @@ async def handle_full_transcript(
         logger.error(f"❌ Error: {e}")
         traceback.print_exc()
         
-        # ⚡ Reset state on error
+        # Reset state on error
         if deepgram_service:
             deepgram_service.set_speaking_state(False)
         

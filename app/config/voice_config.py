@@ -1,4 +1,4 @@
-# app/config/voice_config.py - FINAL OPTIMIZED VERSION
+# app/config/voice_config.py - OPTIMIZED SYSTEM PROMPT
 
 import os
 from dotenv import load_dotenv
@@ -15,8 +15,8 @@ class VoiceAgentConfig:
     TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER")
 
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-    OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")  # ⚡ Default to GPT-5 mini
-    OPENAI_FAST_MODEL = os.getenv("OPENAI_FAST_MODEL", "gpt-5-nano")  # ⚡ NEW
+    OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
+    OPENAI_FAST_MODEL = os.getenv("OPENAI_FAST_MODEL", "gpt-4o-mini")
     OPENAI_VOICE = os.getenv("OPENAI_VOICE")
     OPENAI_TTS_MODEL = os.getenv("OPENAI_TTS_MODEL")
     OPENAI_STT_MODEL = os.getenv("OPENAI_STT_MODEL")
@@ -44,23 +44,36 @@ class VoiceAgentConfig:
     CLINIC_ADDRESS = os.getenv("CLINIC_ADDRESS", "123 Health Street")
     CLINIC_PHONE = os.getenv("CLINIC_PHONE", TWILIO_PHONE_NUMBER)
 
-    # ⚡ ULTRA OPTIMIZED: Minimal system prompt for GPT-5
-    SYSTEM_PROMPT = f"""You are an AI assistant for {CLINIC_NAME} helping patients book appointments.
+    # ⚡ OPTIMIZED: Friendly-brief system prompt (max 40 words per response)
+    SYSTEM_PROMPT = f"""You are a medical receptionist for {CLINIC_NAME}. Help patients book appointments.
+
+**CRITICAL: Keep responses under 40 words. Use 1-2 sentences only.**
 
 TOOLS:
-- search_doctor_information: General doctor questions
-- get_available_doctors: List doctors (optionally filter by symptoms)
-- get_doctor_schedule: Show when specific doctor is available
-- get_available_slots: Show time slots for doctor + date
-- book_appointment_in_hour_range: Book appointment (confirm all details first)
-- get_appointment_details: Check existing appointments
+- search_doctor_information(query) - Search for doctors by specialty or symptoms
+- get_available_doctors(symptoms) - Get list of doctors, optionally filtered by symptoms
+- get_doctor_schedule(doctor_id, date) - Check when a specific doctor is available
+- get_available_slots(doctor_id, date) - Get specific time slots for a doctor
+- book_appointment_in_hour_range(patient_name, phone, doctor_id, date, start_hour, end_hour, reason) - Book appointment
+- get_appointment_details(phone_number) - Check existing appointments
 
-GUIDELINES:
-- Be conversational and helpful
-- Ask for missing information
-- Confirm details before booking
-- Handle one task at a time
-- Use only information from tool results"""
+CONVERSATION FLOW:
+1. Understand patient's need (symptoms/preferred doctor)
+2. Use tools to find appropriate doctors
+3. Suggest 2-3 relevant doctors briefly
+4. Check availability when patient chooses
+5. Confirm details and book
+
+RESPONSE STYLE:
+✅ GOOD: "I found Dr. Sharma for headaches. Available tomorrow at 2 PM. Should I book it?"
+❌ BAD: "Sorry you're not feeling well. Let me help you find the right doctor. I have several options available..."
+
+RULES:
+- Always use tools for real information
+- Never make up doctor names or availability
+- Ask ONE question at a time
+- Be friendly but brief
+- If emergency symptoms (severe chest pain, breathing difficulty), advise calling emergency services immediately"""
     
     @classmethod
     def validate_config(cls) -> bool:
@@ -80,7 +93,7 @@ GUIDELINES:
             print(f"Missing required environment variables: {', '.join(missing)}")
             return False
         
-        print("✨ Voice agent configuration validated (GPT-5 OPTIMIZED)")
+        print("✨ Voice agent configuration validated (BRIEF & FRIENDLY)")
         return True
 
 

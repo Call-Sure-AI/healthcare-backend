@@ -1,4 +1,4 @@
-# app/services/openai_service.py - FIXED FOR GPT-5
+# app/services/openai_service.py - OPTIMIZED WITH MAX_TOKENS
 
 import openai
 import json
@@ -16,18 +16,13 @@ class OpenAIService:
     def __init__(self):
         self.client = AsyncOpenAI(api_key=voice_config.OPENAI_API_KEY)
         
-        # ⚡ GPT-5 MODELS (with correct model names)
-        self.fast_model = "gpt-5-nano-2025-08-07"   # For simple queries
-        self.smart_model = "gpt-5-mini-2025-08-07"  # For tool calls
+        self.fast_model = "gpt-4o-mini"
+        self.smart_model = "gpt-4o"
         
         self.voice = voice_config.OPENAI_VOICE
         self.system_prompt = voice_config.SYSTEM_PROMPT
         
         logger.info(f"✨ OpenAI initialized: Fast={self.fast_model}, Smart={self.smart_model}")
-    
-    def _is_gpt5_model(self, model: str) -> bool:
-        """⚡ NEW: Check if model is GPT-5"""
-        return model.startswith("gpt-5")
     
     async def transcribe_audio(self, audio_file) -> Optional[str]:
         try:
@@ -58,27 +53,29 @@ class OpenAIService:
         self,
         messages: List[Dict[str, str]],
         functions: Optional[List[Dict[str, Any]]] = None,
-        temperature: float = 0.3,
+        temperature: float = 0.4,  # ⚡ OPTIMIZED: Faster generation
         stream: bool = False,
         use_fast_model: bool = False
     ):
         """
-        ⚡ FIXED: Handle GPT-5 models that don't support temperature
+        ⚡ OPTIMIZED: Smart max_tokens based on context
         """
         try:
-            # Choose model
             model = self.fast_model if use_fast_model else self.smart_model
+            
+            # ⚡ SMART MAX_TOKENS: Different for tool calls vs text
+            if functions:
+                max_tokens = 200  # Tool calls need more tokens for JSON structure
+            else:
+                max_tokens = 100  # Text responses should be brief
             
             params = {
                 "model": model,
                 "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
                 "stream": stream,
             }
-            
-            # ⚡ CRITICAL: GPT-5 doesn't support custom temperature!
-            if not self._is_gpt5_model(model):
-                params["temperature"] = temperature
-            # else: GPT-5 uses default temperature=1.0 automatically
             
             if functions:
                 params["tools"] = [
@@ -101,7 +98,7 @@ class OpenAIService:
         compress: bool = True
     ) -> List[Dict[str, str]]:
         """
-        ⚡ OPTIMIZED: Compress conversation history
+        ⚡ OPTIMIZED: Keep last 15 messages for context
         """
         messages = []
         
@@ -111,7 +108,6 @@ class OpenAIService:
             current_year = current_date.year
             day_of_week = current_date.strftime("%A")
 
-            # ⚡ OPTIMIZED: Minimal system prompt for GPT-5
             enhanced_system_prompt = f"""{self.system_prompt}
 
 Today: {day_of_week}, {current_date_str}
@@ -123,9 +119,9 @@ Date format: YYYY-MM-DD"""
                 "content": enhanced_system_prompt
             })
 
-        # ⚡ Keep only last 8 messages if compress=True
-        if compress and len(conversation_history) > 8:
-            messages.extend(conversation_history[-8:])
+        # ⚡ OPTIMIZED: Keep last 15 messages (good context + speed balance)
+        if compress and len(conversation_history) > 15:
+            messages.extend(conversation_history[-15:])
         else:
             messages.extend(conversation_history)
         
@@ -135,24 +131,28 @@ Date format: YYYY-MM-DD"""
         self,
         messages: List[Dict[str, str]],
         functions: Optional[List[Dict[str, Any]]] = None,
-        temperature: float = 0.3,
+        temperature: float = 0.4,
         use_fast_model: bool = False
     ) -> AsyncGenerator[str, None]:
         """
-        ⚡ FIXED: Streaming with GPT-5 support
+        ⚡ OPTIMIZED: Streaming with smart max_tokens
         """
         try:
             model = self.fast_model if use_fast_model else self.smart_model
             
+            # ⚡ Smart max_tokens
+            if functions:
+                max_tokens = 200
+            else:
+                max_tokens = 100
+            
             params = {
                 "model": model,
                 "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
                 "stream": True,
             }
-            
-            # ⚡ CRITICAL: Don't add temperature for GPT-5
-            if not self._is_gpt5_model(model):
-                params["temperature"] = temperature
             
             if functions:
                 params["tools"] = [
@@ -198,7 +198,7 @@ Date format: YYYY-MM-DD"""
         available_functions: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
         """
-        ⚡ FIXED: Use GPT-5 properly
+        ⚡ OPTIMIZED: Process with smart max_tokens
         """
         try:
             messages = self.build_conversation_messages(
@@ -213,7 +213,7 @@ Date format: YYYY-MM-DD"""
             response = await self.chat_completion(
                 messages=messages,
                 functions=available_functions,
-                temperature=0.3,  # Will be ignored for GPT-5
+                temperature=0.4,
                 use_fast_model=use_fast
             )
             
@@ -256,26 +256,22 @@ Date format: YYYY-MM-DD"""
     async def generate_response_streaming(
         self,
         messages: List[Dict[str, str]],
-        temperature: float = 0.3,
+        temperature: float = 0.4,
         use_fast_model: bool = False
     ) -> AsyncGenerator[str, None]:
         """
-        ⚡ FIXED: Generate streaming response
+        ⚡ OPTIMIZED: Generate brief streaming response
         """
         try:
             model = self.fast_model if use_fast_model else self.smart_model
             
-            params = {
-                "model": model,
-                "messages": messages,
-                "stream": True
-            }
-            
-            # ⚡ Don't add temperature for GPT-5
-            if not self._is_gpt5_model(model):
-                params["temperature"] = temperature
-            
-            stream = await self.client.chat.completions.create(**params)
+            stream = await self.client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=100,  # ⚡ Brief responses
+                stream=True
+            )
             
             async for chunk in stream:
                 if chunk.choices[0].delta.content:
