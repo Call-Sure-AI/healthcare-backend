@@ -1,12 +1,13 @@
-# app/services/redis_service.py
+# app/services/redis_service.py - FIXED WITH TOOL CALL SUPPORT
 
 import json
 import redis
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
 from app.config.redis_config import get_redis_client
 from app.config.voice_config import voice_config
 import logging
+import hashlib
 
 logger = logging.getLogger("redis")
 
@@ -17,6 +18,10 @@ class RedisService:
 
     def _get_key(self, call_sid: str) -> str:
         return f"call_session:{call_sid}"
+    
+    def _get_cache_key(self, prefix: str, identifier: str) -> str:
+        """⚡ Generate cache keys"""
+        return f"cache:{prefix}:{identifier}"
 
     def create_session(self, call_sid: str, session_data: Dict[str, Any]) -> bool:
         try:
@@ -50,7 +55,6 @@ class RedisService:
 
     def update_session(self, call_sid: str, updates: Dict[str, Any]) -> bool:
         try:
-            # ⚡ FIX: Changed update_data to updates
             logger.debug(f"Updating session {call_sid} with {updates}")
             session = self.get_session(call_sid)
             if not session:
@@ -72,7 +76,18 @@ class RedisService:
             logger.error(f"❌ Error updating session: {e}")
             return False
 
-    def append_to_conversation(self, call_sid: str, role: str, content: str) -> bool:
+    def append_to_conversation(
+        self, 
+        call_sid: str, 
+        role: str, 
+        content: str = None,
+        tool_calls: List[Dict] = None,
+        tool_call_id: str = None,
+        name: str = None
+    ) -> bool:
+        """
+        ⚡ FIXED: Support tool calls and tool responses
+        """
         try:
             session = self.get_session(call_sid)
             if not session:
@@ -83,9 +98,24 @@ class RedisService:
 
             message = {
                 "role": role,
-                "content": content,
                 "timestamp": datetime.now().isoformat()
             }
+            
+            # Add content if provided
+            if content is not None:
+                message["content"] = content
+            
+            # Add tool_calls if provided (for assistant messages)
+            if tool_calls:
+                message["tool_calls"] = tool_calls
+            
+            # Add tool_call_id if provided (for tool response messages)
+            if tool_call_id:
+                message["tool_call_id"] = tool_call_id
+            
+            # Add name if provided (for tool response messages)
+            if name:
+                message["name"] = name
 
             session['conversation_history'].append(message)
 
@@ -95,6 +125,84 @@ class RedisService:
         except Exception as e:
             logger.error(f"❌ Error appending to conversation: {e}")
             return False
+
+    # ⚡ Response caching methods
+    def cache_response(
+        self, 
+        query_hash: str, 
+        response: str, 
+        ttl: int = 3600
+    ) -> bool:
+        """
+        ⚡ Cache AI responses for common queries
+        """
+        try:
+            key = self._get_cache_key("response", query_hash)
+            self.redis_client.setex(key, ttl, response)
+            logger.debug(f"✓ Cached response: {query_hash[:8]}")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Cache error: {e}")
+            return False
+    
+    def get_cached_response(self, query_hash: str) -> Optional[str]:
+        """
+        ⚡ Retrieve cached response
+        """
+        try:
+            key = self._get_cache_key("response", query_hash)
+            data = self.redis_client.get(key)
+            if data:
+                logger.debug(f"✓ Cache hit: {query_hash[:8]}")
+                return data.decode('utf-8') if isinstance(data, bytes) else data
+            return None
+        except Exception as e:
+            logger.error(f"❌ Cache retrieval error: {e}")
+            return None
+    
+    def cache_tool_result(
+        self,
+        tool_name: str,
+        args_hash: str,
+        result: Dict[str, Any],
+        ttl: int = 300  # 5 minutes for tool results
+    ) -> bool:
+        """
+        ⚡ Cache tool execution results
+        """
+        try:
+            key = self._get_cache_key(f"tool:{tool_name}", args_hash)
+            self.redis_client.setex(key, ttl, json.dumps(result))
+            logger.debug(f"✓ Cached tool result: {tool_name}")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Tool cache error: {e}")
+            return False
+    
+    def get_cached_tool_result(
+        self,
+        tool_name: str,
+        args_hash: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        ⚡ Get cached tool result
+        """
+        try:
+            key = self._get_cache_key(f"tool:{tool_name}", args_hash)
+            data = self.redis_client.get(key)
+            if data:
+                logger.debug(f"✓ Tool cache hit: {tool_name}")
+                data_str = data.decode('utf-8') if isinstance(data, bytes) else data
+                return json.loads(data_str)
+            return None
+        except Exception as e:
+            logger.error(f"❌ Tool cache retrieval error: {e}")
+            return None
+    
+    @staticmethod
+    def hash_query(text: str) -> str:
+        """⚡ Generate hash for caching"""
+        return hashlib.md5(text.lower().strip().encode()).hexdigest()
 
     def delete_session(self, call_sid: str) -> bool:
         try:
@@ -155,5 +263,5 @@ class RedisService:
             return None
 
 
-# Redis Global instance
+# Global instance
 redis_service = RedisService()

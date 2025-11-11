@@ -1,4 +1,5 @@
-# app\config\database.py
+# app/config/database.py - ULTRA OPTIMIZED
+
 from sqlalchemy import create_engine, pool
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -28,14 +29,15 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
+# ⚡ OPTIMIZED: Larger connection pool for parallel queries
 engine = create_engine(
     settings.database_url,
     poolclass=pool.QueuePool,
-    pool_size=10,
-    max_overflow=20,
+    pool_size=20,  # ⚡ Increased from 10
+    max_overflow=40,  # ⚡ Increased from 20
     pool_pre_ping=True,
     pool_recycle=3600,
-    echo=settings.debug
+    echo=False  # ⚡ Disable echo in production
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

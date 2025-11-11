@@ -1,20 +1,28 @@
-# app\services\openai_service.py
+# app/services/openai_service.py - ULTRA FAST VERSION
+
 import openai
 import json
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, AsyncGenerator
 from app.config.voice_config import voice_config
 from datetime import datetime
 from openai import AsyncOpenAI
+import logging
 
+logger = logging.getLogger("openai")
 openai.api_key = voice_config.OPENAI_API_KEY
 
 
 class OpenAIService:
     def __init__(self):
         self.client = AsyncOpenAI(api_key=voice_config.OPENAI_API_KEY)
-        self.model = voice_config.OPENAI_MODEL
+        
+        self.fast_model = "gpt-4o-mini"
+        self.smart_model = "gpt-4o"
+        
         self.voice = voice_config.OPENAI_VOICE
         self.system_prompt = voice_config.SYSTEM_PROMPT
+        
+        logger.info(f"✨ OpenAI initialized: Fast={self.fast_model}, Smart={self.smart_model}")
     
     async def transcribe_audio(self, audio_file) -> Optional[str]:
         try:
@@ -25,7 +33,7 @@ class OpenAIService:
             )
             return response.text
         except Exception as e:
-            print(f"Whisper transcription error: {e}")
+            logger.error(f"Whisper transcription error: {e}")
             return None
     
     async def generate_speech(self, text: str) -> Optional[bytes]:
@@ -38,20 +46,35 @@ class OpenAIService:
             )
             return response.content
         except Exception as e:
-            print(f"TTS generation error: {e}")
+            logger.error(f"TTS generation error: {e}")
             return None
     
     async def chat_completion(
         self,
         messages: List[Dict[str, str]],
         functions: Optional[List[Dict[str, Any]]] = None,
-        temperature: float = 0.7
-    ) -> Optional[Dict[str, Any]]:
+        temperature: float = 0.6,  # ⚡ FASTER: Increased from 0.4
+        stream: bool = False,
+        use_fast_model: bool = False
+    ):
+        """
+        ⚡ ULTRA FAST: Optimized for speed
+        """
         try:
+            model = self.fast_model if use_fast_model else self.smart_model
+            
+            # ⚡ SMART MAX_TOKENS: Optimized for speed
+            if functions:
+                max_tokens = 150  # Reduced from 200 (still enough for tool calls)
+            else:
+                max_tokens = 70   # Reduced from 100 (brief responses)
+            
             params = {
-                "model": self.model,
+                "model": model,
                 "messages": messages,
                 "temperature": temperature,
+                "max_tokens": max_tokens,
+                "stream": stream,
             }
             
             if functions:
@@ -63,15 +86,20 @@ class OpenAIService:
             
             response = await self.client.chat.completions.create(**params)
             return response
+            
         except Exception as e:
-            print(f"Chat completion error: {e}")
+            logger.error(f"Chat completion error: {e}")
             return None
     
     def build_conversation_messages(
         self,
         conversation_history: List[Dict[str, str]],
-        include_system: bool = True
+        include_system: bool = True,
+        compress: bool = True
     ) -> List[Dict[str, str]]:
+        """
+        ⚡ BULLETPROOF: Clean tool chains + smart compression
+        """
         messages = []
         
         if include_system:
@@ -82,26 +110,134 @@ class OpenAIService:
 
             enhanced_system_prompt = f"""{self.system_prompt}
 
-    IMPORTANT DATE INFORMATION:
-    - Today is {day_of_week}, {current_date_str}
-    - Current year: {current_year}
-    - When users mention dates without a year (e.g., "October 29" or "29th October"), assume they mean {current_year}
-    - If a date would be in the past (e.g., user says "October 20" but today is October 25), assume they mean {current_year + 1}
-    - ALWAYS format dates as YYYY-MM-DD in function calls
-    - Example: User says "October 29" → Use "{current_year}-10-29" in the date field
-    - Example: User says "29th October" → Use "{current_year}-10-29" in the date field
-
-    Remember: You are helping patients book medical appointments. Be professional, warm, and verify all details before confirming bookings.
-    """
+    Today: {day_of_week}, {current_date_str}
+    Year: {current_year}
+    Date format: YYYY-MM-DD"""
             
             messages.append({
                 "role": "system",
                 "content": enhanced_system_prompt
             })
 
-        messages.extend(conversation_history)
+        # ⚡ STEP 1: Clean conversation history (remove orphaned tool messages)
+        cleaned_history = []
+        i = 0
+        while i < len(conversation_history):
+            msg = conversation_history[i]
+            role = msg.get("role")
+            
+            # If we find a 'tool' message, verify it has a preceding 'assistant' with 'tool_calls'
+            if role == "tool":
+                # Look backwards for the assistant message
+                found_tool_call = False
+                for j in range(len(cleaned_history) - 1, -1, -1):
+                    prev_msg = cleaned_history[j]
+                    if prev_msg.get("role") == "assistant" and prev_msg.get("tool_calls"):
+                        found_tool_call = True
+                        break
+                    # Stop if we hit another assistant or user message
+                    if prev_msg.get("role") in ["assistant", "user"]:
+                        break
+                
+                if found_tool_call:
+                    # Valid tool message - keep it
+                    cleaned_history.append(msg)
+                else:
+                    # Orphaned tool message - skip it
+                    print(f"⚠️ Skipping orphaned tool message at index {i}")
+            else:
+                # Not a tool message - keep it
+                cleaned_history.append(msg)
+            
+            i += 1
+        
+        # ⚡ STEP 2: Smart compression (keep last 20 messages)
+        if compress and len(cleaned_history) > 20:
+            # Start from position that keeps 20 messages
+            keep_from = len(cleaned_history) - 20
+            
+            # Find safe boundary (user or system message)
+            for j in range(keep_from, max(0, keep_from - 5), -1):
+                if cleaned_history[j].get("role") in ["user", "system"]:
+                    keep_from = j
+                    break
+            
+            final_history = cleaned_history[keep_from:]
+        else:
+            final_history = cleaned_history
+        
+        # ⚡ STEP 3: Final validation - ensure no orphaned tool at start
+        while final_history and final_history[0].get("role") == "tool":
+            print(f"⚠️ Removing orphaned tool message at start of final history")
+            final_history.pop(0)
+        
+        messages.extend(final_history)
         
         return messages
+    
+    async def chat_completion_streaming(
+        self,
+        messages: List[Dict[str, str]],
+        functions: Optional[List[Dict[str, Any]]] = None,
+        temperature: float = 0.6,  # ⚡ FASTER
+        use_fast_model: bool = False
+    ) -> AsyncGenerator[str, None]:
+        """
+        ⚡ ULTRA FAST: Streaming with optimized settings
+        """
+        try:
+            model = self.fast_model if use_fast_model else self.smart_model
+            
+            # ⚡ Smart max_tokens
+            if functions:
+                max_tokens = 150
+            else:
+                max_tokens = 70
+            
+            params = {
+                "model": model,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "stream": True,
+            }
+            
+            if functions:
+                params["tools"] = [
+                    {"type": "function", "function": func}
+                    for func in functions
+                ]
+                params["tool_choice"] = "auto"
+                params["stream"] = False
+                
+                response = await self.client.chat.completions.create(**params)
+                
+                choice = response.choices[0]
+                message = choice.message
+                
+                if choice.finish_reason == "tool_calls" and message.tool_calls:
+                    yield json.dumps({
+                        "type": "function_call",
+                        "data": {
+                            "name": message.tool_calls[0].function.name,
+                            "arguments": json.loads(message.tool_calls[0].function.arguments),
+                            "id": message.tool_calls[0].id
+                        }
+                    })
+                else:
+                    yield message.content
+                return
+            
+            # ⚡ STREAMING MODE
+            stream = await self.client.chat.completions.create(**params)
+            
+            async for chunk in stream:
+                if chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+                    
+        except Exception as e:
+            logger.error(f"Streaming error: {e}")
+            yield "I apologize, but I encountered an error."
     
     async def process_user_input(
         self,
@@ -109,13 +245,23 @@ class OpenAIService:
         conversation_history: List[Dict[str, str]],
         available_functions: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
+        """
+        ⚡ ULTRA FAST: Process user input
+        """
         try:
-            messages = self.build_conversation_messages(conversation_history)
+            messages = self.build_conversation_messages(
+                conversation_history,
+                compress=True
+            )
             messages.append({"role": "user", "content": user_message})
 
+            use_fast = (available_functions is None or len(available_functions) == 0)
+            
             response = await self.chat_completion(
                 messages=messages,
-                functions=available_functions
+                functions=available_functions,
+                temperature=0.6,  # ⚡ FASTER
+                use_fast_model=use_fast
             )
             
             if not response:
@@ -147,70 +293,41 @@ class OpenAIService:
             return result
             
         except Exception as e:
-            print(f"Error processing user input: {e}")
+            logger.error(f"Error processing user input: {e}")
             return {
                 "response": "I apologize, but I encountered an error. Could you please try again?",
                 "function_call": None,
                 "finish_reason": "error"
             }
 
-    async def process_user_input_streaming(
+    async def generate_response_streaming(
         self,
-        user_message: str,
-        conversation_history: List[Dict[str, str]],
-        available_functions: Optional[List[Dict[str, Any]]] = None
-    ) -> Dict[str, Any]:
+        messages: List[Dict[str, str]],
+        temperature: float = 0.6,  # ⚡ FASTER
+        use_fast_model: bool = False
+    ) -> AsyncGenerator[str, None]:
         """
-        ⚡ OPTIMIZED: Single LLM call with streaming response
+        ⚡ ULTRA FAST: Generate streaming response
         """
         try:
-            messages = self.build_conversation_messages(conversation_history)
-            messages.append({"role": "user", "content": user_message})
-
-            params = {
-                "model": self.model,
-                "messages": messages,
-                "temperature": 0.7,
-                "stream": False  # Keep False for function calls
-            }
+            model = self.fast_model if use_fast_model else self.smart_model
             
-            if available_functions:
-                params["tools"] = [
-                    {"type": "function", "function": func}
-                    for func in available_functions
-                ]
-                params["tool_choice"] = "auto"
+            stream = await self.client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=70,  # ⚡ Brief responses
+                stream=True
+            )
             
-            response = await self.client.chat.completions.create(**params)
-            
-            choice = response.choices[0]
-            message = choice.message
-            
-            result = {
-                "finish_reason": choice.finish_reason,
-                "function_call": None,
-                "response": None
-            }
-
-            if choice.finish_reason == "tool_calls" and message.tool_calls:
-                tool_call = message.tool_calls[0]
-                result["function_call"] = {
-                    "name": tool_call.function.name,
-                    "arguments": json.loads(tool_call.function.arguments),
-                    "id": tool_call.id
-                }
-            else:
-                result["response"] = message.content
-            
-            return result
-            
+            async for chunk in stream:
+                if chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+                    
         except Exception as e:
-            logger.error(f"Error: {e}")
-            return {
-                "response": "I apologize, but I encountered an error. Could you please try again?",
-                "function_call": None,
-                "finish_reason": "error"
-            }
+            logger.error(f"Streaming error: {e}")
+            yield "I apologize, but I encountered an error."
 
-# Open AI Global instance
+
+# Global instance
 openai_service = OpenAIService()
