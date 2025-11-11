@@ -1,4 +1,4 @@
-# app/routes/ai_tools.py - CONVERSATIONAL FLOW WITH AI REASONING
+# app/routes/ai_tools.py - CONVERSATIONAL FLOW WITH TIME VALIDATION
 
 from datetime import date, datetime, timedelta
 from typing import Dict, Any, List, Optional
@@ -71,10 +71,7 @@ Max 4 specializations."""
         )
         
         result = response.choices[0].message.content.strip()
-        
-        # Clean up response (remove markdown if present)
         result = result.replace('```json', '').replace('```', '').strip()
-        
         specializations = json.loads(result)
         
         print(f"✅ AI recommended: {specializations}")
@@ -87,21 +84,16 @@ Max 4 specializations."""
 
 
 def fuzzy_match_doctor_name(query: str, available_doctors: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """
-    ⚡ Fuzzy match doctor names (handles STT errors)
-    """
+    """⚡ Fuzzy match doctor names (handles STT errors)"""
     if not query or not available_doctors:
         return None
     
-    query_clean = query.lower().strip()
-    query_clean = query_clean.replace('dr.', '').replace('dr', '').replace('doctor', '').strip()
-    
+    query_clean = query.lower().strip().replace('dr.', '').replace('dr', '').replace('doctor', '').strip()
     best_match = None
     best_score = 0.0
     
     for doctor in available_doctors:
         doctor_name = doctor["name"].lower().replace('dr.', '').replace('dr', '').strip()
-        
         similarity = SequenceMatcher(None, query_clean, doctor_name).ratio()
         
         query_words = query_clean.split()
@@ -127,9 +119,7 @@ def fuzzy_match_doctor_name(query: str, available_doctors: List[Dict[str, Any]])
 
 
 def search_doctor_information(query: str, top_k: int = 3) -> Dict[str, Any]:
-    """
-    ⚡ HYBRID: Fuzzy name matching + RAG semantic search
-    """
+    """⚡ HYBRID: Fuzzy name matching + RAG semantic search"""
     print(f"\n--- RAG Search: '{query}' ---")
     
     # STEP 1: Try fuzzy name matching
@@ -151,11 +141,7 @@ def search_doctor_information(query: str, top_k: int = 3) -> Dict[str, Any]:
         
         fuzzy_match = fuzzy_match_doctor_name(query, available_doctors)
         if fuzzy_match:
-            return {
-                "success": True,
-                "results": [fuzzy_match],
-                "matched_via": "fuzzy_name"
-            }
+            return {"success": True, "results": [fuzzy_match], "matched_via": "fuzzy_name"}
     except Exception as e:
         print(f"Fuzzy match error: {e}")
     
@@ -185,19 +171,14 @@ def search_doctor_information(query: str, top_k: int = 3) -> Dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 
-def enrich_doctors_with_rag(
-    doctors: List[Dict[str, Any]],
-    user_context: str
-) -> List[Dict[str, Any]]:
-    """
-    ⚡ RAG ENRICHMENT: Add experience context
-    """
+def enrich_doctors_with_rag(doctors: List[Dict[str, Any]], user_context: str) -> List[Dict[str, Any]]:
+    """⚡ RAG ENRICHMENT: Add experience context"""
     if not doctors or not user_context or not qdrant_client:
         return doctors
     
     print(f"\n⚡ RAG Enrichment for {len(doctors)} doctors")
-    
     enriched = []
+    
     for doctor in doctors:
         doctor_copy = doctor.copy()
         doctor_id = doctor.get("doctor_id")
@@ -218,7 +199,6 @@ def enrich_doctors_with_rag(
                     if any(word in combined for word in user_context.lower().split()):
                         doctor_copy["has_experience"] = True
                         print(f"  ✓ {name}: Has relevant experience")
-        
         except Exception as e:
             print(f"  ✗ Enrichment error: {e}")
         
@@ -227,23 +207,13 @@ def enrich_doctors_with_rag(
     return enriched
 
 
-def find_doctors_by_specializations(
-    available_doctors: List[Dict[str, Any]],
-    specializations: List[str],
-    max_results: int = 3
-) -> List[Dict[str, Any]]:
-    """
-    Find doctors matching AI-recommended specializations
-    """
+def find_doctors_by_specializations(available_doctors: List[Dict[str, Any]], specializations: List[str], max_results: int = 3) -> List[Dict[str, Any]]:
+    """Find doctors matching AI-recommended specializations"""
     print(f"\n🔍 Searching for: {specializations}")
-    
     found_doctors = []
     
     for spec in specializations:
-        matches = [
-            doc for doc in available_doctors
-            if spec.lower() in doc.get("specialization", "").lower()
-        ]
+        matches = [doc for doc in available_doctors if spec.lower() in doc.get("specialization", "").lower()]
         
         if matches:
             print(f"  ✅ Found {len(matches)} {spec} doctor(s)")
@@ -266,14 +236,11 @@ def find_doctors_by_specializations(
 AI_FUNCTIONS = [
     {
         "name": "search_doctor_information",
-        "description": "Search for specific doctor by name. Handles typos/STT errors (e.g., 'Anu Patel' → 'Aarav Patel'). Use when patient requests specific doctor by name.",
+        "description": "Search for specific doctor by name. Handles typos/STT errors.",
         "parameters": {
             "type": "object",
             "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Doctor name (e.g., 'Dr. Sharma', 'Anu Patel')",
-                },
+                "query": {"type": "string", "description": "Doctor name"},
                 "top_k": {"type": "integer", "default": 3}
             },
             "required": ["query"],
@@ -281,14 +248,11 @@ AI_FUNCTIONS = [
     },
     {
         "name": "get_available_doctors",
-        "description": "Get available doctors ONLY AFTER patient has chosen specialist type in Stage 3. AI analyzes full context (symptoms + duration + chosen specialization) to recommend specific doctors with reasons. DO NOT call this in Stage 1 or Stage 2.",
+        "description": "Get available doctors ONLY in Stage 3 after patient chose specialist type.",
         "parameters": {
             "type": "object",
             "properties": {
-                "user_context": {
-                    "type": "string",
-                    "description": "COMPLETE context including: symptoms + duration + severity + chosen specialist type. Example: 'headache 3 days mild pain, patient wants General Medicine' or 'fever 102F with cough, patient prefers General Medicine'"
-                }
+                "user_context": {"type": "string", "description": "Complete context: symptoms + duration + chosen specialist"}
             },
             "required": ["user_context"]
         }
@@ -393,16 +357,13 @@ class AIToolsExecutor:
             return {"success": False, "error": str(e)}
 
     def get_available_doctors(self, user_context: str = "") -> Dict[str, Any]:
-        """
-        ⚡ AI-POWERED: Intelligent doctor recommendations
-        """
+        """⚡ AI-POWERED: Intelligent doctor recommendations"""
         try:            
             print(f"\n{'='*80}")
             print(f"🧠 AI-POWERED DOCTOR RECOMMENDATION (STAGE 3)")
             print(f"User context: '{user_context}'")
             print(f"{'='*80}\n")
             
-            # Get active doctors
             doctors = DoctorService.get_all_active_doctors(self.db)
             today = date.today()
             doctors_on_leave = self.db.query(DoctorLeave.doctor_id).filter(
@@ -425,33 +386,18 @@ class AIToolsExecutor:
             print(f"📋 {len(active_doctors)} doctors available")
 
             if not active_doctors:
-                return {
-                    "success": False,
-                    "message": "No doctors available",
-                    "doctors": []
-                }
+                return {"success": False, "message": "No doctors available", "doctors": []}
             
-            # ⚡ STEP 1: AI determines best specializations
             if user_context:
                 specializations = get_ai_specialization_recommendations(user_context)
             else:
                 specializations = ["General Medicine"]
             
-            # ⚡ STEP 2: Find matching doctors
-            recommended_doctors = find_doctors_by_specializations(
-                active_doctors,
-                specializations,
-                max_results=3
-            )
+            recommended_doctors = find_doctors_by_specializations(active_doctors, specializations, max_results=3)
             
-            # ⚡ STEP 3: RAG enrichment
             if user_context:
-                recommended_doctors = enrich_doctors_with_rag(
-                    recommended_doctors,
-                    user_context
-                )
+                recommended_doctors = enrich_doctors_with_rag(recommended_doctors, user_context)
             
-            # Add recommendation reasons
             for doc in recommended_doctors:
                 spec = doc.get("matched_specialization", "available")
                 has_exp = doc.get("has_experience", False)
@@ -483,16 +429,12 @@ class AIToolsExecutor:
     def get_appointment_details(self, patient_name: str, patient_phone: str) -> Dict[str, Any]:
         """Fetch appointment details"""
         try:
-            print(f"Searching appointment: {patient_name} ({patient_phone})")
-            
             details = AppointmentService.get_appointment_details(self.db, patient_name, patient_phone)
-            
             if details:
                 return {"success": True, "appointment": details}
             else:
                 return {"success": False, "error": "No appointments found"}
         except Exception as e:
-            print(f"Error: {e}")
             return {"success": False, "error": str(e)}
 
     def _parse_date(self, date_str: str) -> str:
@@ -535,7 +477,7 @@ class AIToolsExecutor:
 
         if month_num and len(numbers) >= 2:
             day = int(numbers[0])
-            year = int(numbers[1]) if len(numbers[1]) == 4 else int(numbers[0])
+            year = int(numbers[1]) if len(str(numbers[1])) == 4 else int(numbers[0])
             if year < 100:
                 year += 2000
             return f"{year:04d}-{month_num:02d}-{day:02d}"
@@ -573,7 +515,7 @@ class AIToolsExecutor:
             return None
 
     def get_available_slots(self, doctor_id: str, date: str) -> Dict[str, Any]:
-        """Get time slots"""
+        """⚡ Get time slots - FILTER MIDNIGHT HOURS (00:00-05:59)"""
         try:
             if not doctor_id.startswith('DOC'):
                 resolved_id = self._find_doctor_id_by_name(doctor_id)
@@ -583,8 +525,8 @@ class AIToolsExecutor:
                     return {"success": False, "error": f"Doctor '{doctor_id}' not found", "slots": []}
             
             formatted_date = self._parse_date(date)
-            
             date_obj = datetime.strptime(formatted_date, "%Y-%m-%d").date()
+            
             if date_obj < datetime.now().date():
                 return {"success": False, "error": f"Date {formatted_date} is in past", "slots": []}
             
@@ -592,9 +534,34 @@ class AIToolsExecutor:
             
             if "available_slots" in result:
                 slots = result["available_slots"]
-                if not slots:
-                    return {"success": False, "error": f"No slots on {formatted_date}", "slots": []}
-                return {"success": True, "doctor_id": doctor_id, "date": formatted_date, "slots": slots, "count": len(slots)}
+                
+                # ⚡ FILTER OUT MIDNIGHT HOURS (00:00 - 05:59)
+                realistic_slots = []
+                for slot in slots:
+                    try:
+                        hour = int(slot.split(':')[0])
+                        # Only keep slots between 6 AM (06:00) and 11 PM (23:59)
+                        if 6 <= hour <= 23:
+                            realistic_slots.append(slot)
+                    except:
+                        realistic_slots.append(slot)  # Keep if can't parse
+                
+                print(f"⚡ Filtered {len(slots)} → {len(realistic_slots)} realistic slots")
+                
+                if not realistic_slots:
+                    return {
+                        "success": False,
+                        "error": f"No slots during clinic hours (6 AM - 11 PM) on {formatted_date}. Please try another date.",
+                        "slots": []
+                    }
+                
+                return {
+                    "success": True,
+                    "doctor_id": doctor_id,
+                    "date": formatted_date,
+                    "slots": realistic_slots,
+                    "count": len(realistic_slots)
+                }
             else:
                 return {"success": False, "error": result.get("error", "No slots"), "slots": []}
                 
@@ -631,11 +598,11 @@ class AIToolsExecutor:
         time_range: str,
         reason: str = ""
     ) -> Dict[str, Any]:
-        """Book in hour range"""
+        """⚡ Book in hour range WITH VALIDATION"""
         try:
             numbers = re.findall(r'\d+', time_range)
             if not numbers:
-                return {"success": False, "error": "Could not parse time"}
+                return {"success": False, "error": "Could not understand the time. Please say a specific hour like '9 AM' or '2 PM'."}
             
             hour = int(numbers[0])
             if "pm" in time_range.lower() and hour < 12:
@@ -643,6 +610,25 @@ class AIToolsExecutor:
             elif "am" in time_range.lower() and hour == 12:
                 hour = 0
             
+            # ⚡ VALIDATE CLINIC HOURS (6 AM - 11 PM)
+            if hour < 6 or hour > 23:
+                if hour == 0:
+                    time_display = "12 AM (midnight)"
+                elif hour < 6:
+                    time_display = f"{hour} AM"
+                elif hour == 12:
+                    time_display = "12 PM"
+                elif hour > 12:
+                    time_display = f"{hour-12} PM"
+                else:
+                    time_display = f"{hour} AM"
+                
+                return {
+                    "success": False,
+                    "error": f"{time_display} is outside clinic hours. Our clinic operates from 6 AM to 11 PM. Please choose a time in that range."
+                }
+            
+            # Get available slots (already filtered by get_available_slots)
             slots_result = self.get_available_slots(doctor_id, appointment_date)
             if not slots_result.get("success"):
                 return {"success": False, "error": slots_result.get("error")}
@@ -651,8 +637,32 @@ class AIToolsExecutor:
             slots_in_hour = [s for s in available_slots if s.startswith(f"{hour:02d}:")]
             
             if not slots_in_hour:
-                return {"success": False, "error": f"No slots between {hour}:00-{hour+1}:00"}
+                # ⚡ SUGGEST ALTERNATIVES
+                if available_slots:
+                    available_hours = sorted(set(int(s.split(':')[0]) for s in available_slots))
+                    hour_suggestions = []
+                    
+                    for h in available_hours[:3]:  # Top 3 alternatives
+                        if h == 12:
+                            hour_suggestions.append("12 PM")
+                        elif h < 12:
+                            hour_suggestions.append(f"{h} AM")
+                        else:
+                            hour_suggestions.append(f"{h-12} PM")
+                    
+                    if hour < 12:
+                        requested_display = f"{hour} AM"
+                    elif hour == 12:
+                        requested_display = "12 PM"
+                    else:
+                        requested_display = f"{hour-12} PM"
+                    
+                    suggestion = f"No slots at {requested_display}. Available: {', '.join(hour_suggestions)}. Which would you prefer?"
+                    return {"success": False, "error": suggestion}
+                else:
+                    return {"success": False, "error": f"No slots available on this date. Would you like to try another date?"}
             
+            # Try to book first available slot in the hour
             for slot in sorted(slots_in_hour):
                 try:
                     appointment_data = AppointmentCreate(
@@ -668,6 +678,20 @@ class AIToolsExecutor:
                     appointment = AppointmentService.create_appointment(self.db, appointment_data)
                     if appointment:
                         doctor = DoctorService.get_doctor_by_id(self.db, doctor_id)
+                        
+                        # Convert to 12-hour format for confirmation
+                        slot_hour = int(slot.split(':')[0])
+                        slot_min = slot.split(':')[1]
+                        
+                        if slot_hour == 0:
+                            time_display = f"12:{slot_min} AM"
+                        elif slot_hour < 12:
+                            time_display = f"{slot_hour}:{slot_min} AM"
+                        elif slot_hour == 12:
+                            time_display = f"12:{slot_min} PM"
+                        else:
+                            time_display = f"{slot_hour-12}:{slot_min} PM"
+                        
                         return {
                             "success": True,
                             "appointment": {
@@ -677,14 +701,27 @@ class AIToolsExecutor:
                                 "doctor_id": appointment.doctor_id,
                                 "doctor_name": doctor.name if doctor else "Unknown",
                                 "appointment_date": str(appointment.appointment_date),
-                                "appointment_time": appointment.appointment_time
+                                "appointment_time": appointment.appointment_time,
+                                "appointment_time_display": time_display
                             }
                         }
                 except Exception as e:
+                    print(f"Booking attempt failed: {e}")
                     self.db.rollback()
                     continue
             
-            return {"success": False, "error": f"All slots in hour {hour} unavailable"}
+            # All slots in hour failed
+            if hour < 12:
+                requested_display = f"{hour} AM"
+            elif hour == 12:
+                requested_display = "12 PM"
+            else:
+                requested_display = f"{hour-12} PM"
+            
+            return {
+                "success": False,
+                "error": f"All slots around {requested_display} are now taken. Please choose a different time."
+            }
             
         except Exception as e:
             print(f"Error: {e}")
