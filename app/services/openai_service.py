@@ -1,4 +1,4 @@
-# app/services/openai_service.py - ULTRA OPTIMIZED
+# app/services/openai_service.py - GPT-5 NANO + MINI OPTIMIZED
 
 import openai
 import json
@@ -15,9 +15,15 @@ openai.api_key = voice_config.OPENAI_API_KEY
 class OpenAIService:
     def __init__(self):
         self.client = AsyncOpenAI(api_key=voice_config.OPENAI_API_KEY)
-        self.model = voice_config.OPENAI_MODEL
+        
+        # ⚡ DUAL MODEL STRATEGY
+        self.fast_model = "gpt-5-nano"      # For simple queries (ULTRA FAST)
+        self.smart_model = "gpt-5-mini"     # For tool calls (FAST + Smart)
+        
         self.voice = voice_config.OPENAI_VOICE
         self.system_prompt = voice_config.SYSTEM_PROMPT
+        
+        logger.info(f"✨ OpenAI initialized: Fast={self.fast_model}, Smart={self.smart_model}")
     
     async def transcribe_audio(self, audio_file) -> Optional[str]:
         try:
@@ -48,15 +54,19 @@ class OpenAIService:
         self,
         messages: List[Dict[str, str]],
         functions: Optional[List[Dict[str, Any]]] = None,
-        temperature: float = 0.5,  # ⚡ OPTIMIZED: Lower temp = faster
-        stream: bool = False
+        temperature: float = 0.3,  # ⚡ OPTIMIZED: Lower = faster
+        stream: bool = False,
+        use_fast_model: bool = False  # ⚡ NEW: Choose model
     ):
         """
-        ⚡ OPTIMIZED: Support both streaming and non-streaming
+        ⚡ OPTIMIZED: Support both streaming and non-streaming + model selection
         """
         try:
+            # ⚡ Choose model based on complexity
+            model = self.fast_model if use_fast_model else self.smart_model
+            
             params = {
-                "model": self.model,
+                "model": model,
                 "messages": messages,
                 "temperature": temperature,
                 "stream": stream,
@@ -80,7 +90,7 @@ class OpenAIService:
         self,
         conversation_history: List[Dict[str, str]],
         include_system: bool = True,
-        compress: bool = True  # ⚡ NEW: Compress long histories
+        compress: bool = True  # ⚡ Compress long histories
     ) -> List[Dict[str, str]]:
         """
         ⚡ OPTIMIZED: Compress conversation history for faster responses
@@ -93,23 +103,21 @@ class OpenAIService:
             current_year = current_date.year
             day_of_week = current_date.strftime("%A")
 
-            # ⚡ OPTIMIZED: Shorter, more focused system prompt
+            # ⚡ OPTIMIZED: Minimal system prompt
             enhanced_system_prompt = f"""{self.system_prompt}
 
 Today: {day_of_week}, {current_date_str}
 Year: {current_year}
-Date format: YYYY-MM-DD
-If date is past, use {current_year + 1}
-"""
+Date format: YYYY-MM-DD"""
             
             messages.append({
                 "role": "system",
                 "content": enhanced_system_prompt
             })
 
-        # ⚡ OPTIMIZED: Keep only last 10 messages if compress=True
-        if compress and len(conversation_history) > 10:
-            messages.extend(conversation_history[-10:])
+        # ⚡ OPTIMIZED: Keep only last 8 messages if compress=True
+        if compress and len(conversation_history) > 8:
+            messages.extend(conversation_history[-8:])
         else:
             messages.extend(conversation_history)
         
@@ -119,34 +127,33 @@ If date is past, use {current_year + 1}
         self,
         messages: List[Dict[str, str]],
         functions: Optional[List[Dict[str, Any]]] = None,
-        temperature: float = 0.5
+        temperature: float = 0.3,
+        use_fast_model: bool = False
     ) -> AsyncGenerator[str, None]:
         """
-        ⚡ NEW: Streaming chat completion that yields tokens as they arrive
-        Returns: AsyncGenerator that yields text chunks
+        ⚡ OPTIMIZED: Streaming chat completion
         """
         try:
+            model = self.fast_model if use_fast_model else self.smart_model
+            
             params = {
-                "model": self.model,
+                "model": model,
                 "messages": messages,
                 "temperature": temperature,
-                "stream": True,  # ⚡ CRITICAL: Enable streaming
+                "stream": True,
             }
             
-            # Note: Streaming doesn't work with function calls
-            # We'll handle this in voice_agent_service
+            # Note: Streaming doesn't work well with function calls
             if functions:
                 params["tools"] = [
                     {"type": "function", "function": func}
-                    for func in available_functions
+                    for func in functions
                 ]
                 params["tool_choice"] = "auto"
-                # Disable streaming if functions present
                 params["stream"] = False
                 
                 response = await self.client.chat.completions.create(**params)
                 
-                # Return non-streaming response
                 choice = response.choices[0]
                 message = choice.message
                 
@@ -181,19 +188,23 @@ If date is past, use {current_year + 1}
         available_functions: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
         """
-        ⚡ OPTIMIZED: Faster temperature + compression
+        ⚡ OPTIMIZED: Use gpt-5-mini for tool detection
         """
         try:
             messages = self.build_conversation_messages(
                 conversation_history,
-                compress=True  # ⚡ Enable compression
+                compress=True
             )
             messages.append({"role": "user", "content": user_message})
 
+            # ⚡ Use smart model if functions available, else use fast model
+            use_fast = (available_functions is None or len(available_functions) == 0)
+            
             response = await self.chat_completion(
                 messages=messages,
                 functions=available_functions,
-                temperature=0.5  # ⚡ OPTIMIZED: Lower = faster
+                temperature=0.3,
+                use_fast_model=use_fast
             )
             
             if not response:
@@ -235,18 +246,20 @@ If date is past, use {current_year + 1}
     async def generate_response_streaming(
         self,
         messages: List[Dict[str, str]],
-        temperature: float = 0.5
+        temperature: float = 0.3,
+        use_fast_model: bool = False  # ⚡ Allow model selection
     ) -> AsyncGenerator[str, None]:
         """
-        ⚡ NEW: Generate streaming response (for use AFTER tool execution)
-        No function calls - just pure text generation
+        ⚡ OPTIMIZED: Generate streaming response (for use AFTER tool execution)
         """
         try:
+            model = self.fast_model if use_fast_model else self.smart_model
+            
             stream = await self.client.chat.completions.create(
-                model=self.model,
+                model=model,
                 messages=messages,
                 temperature=temperature,
-                stream=True  # ⚡ CRITICAL
+                stream=True
             )
             
             async for chunk in stream:

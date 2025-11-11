@@ -1,4 +1,5 @@
-# app\services\deepgram_service.py
+# app/services/deepgram_service.py - ULTRA OPTIMIZED FOR INDIAN ENGLISH
+
 import asyncio
 import base64
 import logging
@@ -12,19 +13,27 @@ import time
 logger = logging.getLogger(__name__)
 
 TranscriptCallback = Callable[[str, float], Awaitable[None]]
+InterruptionCallback = Callable[[], Awaitable[None]]
 
 
 class DeepgramService:
-    def __init__(self, on_speech_end_callback: TranscriptCallback):
+    def __init__(
+        self, 
+        on_speech_end_callback: TranscriptCallback,
+        on_interruption_callback: InterruptionCallback = None
+    ):
         self.dg_connection = None
         self.final_result = ""
         self.speech_final = False
         self._on_speech_end = on_speech_end_callback
+        self._on_interruption = on_interruption_callback
         self.audio_sent_count = 0
         self._connection_established = False
+        self._is_speaking = False  # ⚡ NEW: Track if AI is speaking
+        self._last_transcript_time = 0
         
         logger.info("=" * 80)
-        logger.info("DeepgramService -> Initializing SDK 3.7.2")
+        logger.info("DeepgramService -> Initializing SDK 3.7.2 (OPTIMIZED)")
         logger.info("=" * 80)
         self._initialize_connection()
     
@@ -59,6 +68,14 @@ class DeepgramService:
             traceback.print_exc()
             self.initialized = False
     
+    def set_speaking_state(self, is_speaking: bool):
+        """⚡ NEW: Track when AI is speaking (for interruption detection)"""
+        self._is_speaking = is_speaking
+        if is_speaking:
+            logger.debug("🎤 AI started speaking")
+        else:
+            logger.debug("🎤 AI stopped speaking")
+    
     async def connect(self) -> bool:
         if not hasattr(self, 'initialized') or not self.initialized:
             logger.error("Client not initialized")
@@ -66,7 +83,7 @@ class DeepgramService:
         
         try:
             logger.info("=" * 80)
-            logger.info("CONNECTING TO DEEPGRAM")
+            logger.info("CONNECTING TO DEEPGRAM (OPTIMIZED FOR INDIAN ENGLISH)")
             logger.info("=" * 80)
 
             self.dg_connection = self.client.listen.asynclive.v("1")
@@ -100,23 +117,41 @@ class DeepgramService:
             
             logger.info("Async handlers registered")
 
+            # ⚡ ULTRA OPTIMIZED CONFIG FOR INDIAN ENGLISH
             options = self.LiveOptions(
-                model="nova-2-phonecall",
+                # Model & Language
+                model="nova-2-phonecall",           # Best for phone calls
+                language="en-IN",                   # ⚡ Indian English accent
+                
+                # Audio Format (Twilio standard)
                 encoding="mulaw",
                 sample_rate=8000,
+                channels=1,
+                
+                # Formatting & Quality
+                smart_format=True,                  # ⚡ Better formatting
                 punctuate=True,
+                filler_words=True,                  # ⚡ Handle "um", "uh"
+                diarize=False,                      # ⚡ Single speaker optimization
+                
+                # Timing & Detection
                 interim_results=True,
-                endpointing=300,
-                utterance_end_ms=1200
+                endpointing=600,                    # ⚡ Increased from 300ms
+                utterance_end_ms=1800,              # ⚡ Increased from 1200ms
+                
+                # Additional optimizations
+                numerals=True,                      # Better number handling
+                profanity_filter=False,
             )
             
-            logger.info(f"Options: {options.model}, {options.encoding}, {options.sample_rate}Hz")
+            logger.info(f"✨ Config: {options.model}, {options.language}, {options.encoding}, {options.sample_rate}Hz")
+            logger.info(f"✨ Endpointing: {options.endpointing}ms, Utterance: {options.utterance_end_ms}ms")
 
             logger.info("Starting connection...")
             await self.dg_connection.start(options)
             
             logger.info("=" * 80)
-            logger.info("CONNECTED!")
+            logger.info("CONNECTED! (OPTIMIZED)")
             logger.info("=" * 80)
             return True
             
@@ -134,13 +169,12 @@ class DeepgramService:
         logger.info("=" * 80)
     
     async def _on_metadata(self, *args, **kwargs):
-        logger.info("Received metadata from Deepgram")
+        logger.debug("Received metadata from Deepgram")
     
     async def _on_utterance_end(self, *args, **kwargs):
+        """⚡ OPTIMIZED: Better utterance end detection"""
         if self.final_result.strip():
             final_text = self.final_result.strip()
-            
-            # ⚡ ADD: Track when speech ended
             speech_end_time = time.time()
             
             logger.info("=" * 80)
@@ -148,11 +182,11 @@ class DeepgramService:
             logger.info(f"USER SAID: '{final_text}'")
             logger.info("=" * 80)
             
-            # Pass speech_end_time to callback
             await self._on_speech_end(final_text, speech_end_time)
             self.final_result = ""
     
     async def _on_transcript(self, *args, **kwargs):
+        """⚡ OPTIMIZED: Better transcript handling + interruption detection"""
         try:
             result = kwargs.get('result') or (args[0] if args else None)
             if not result:
@@ -168,6 +202,20 @@ class DeepgramService:
                 return
 
             is_final = getattr(result, 'is_final', False)
+            current_time = time.time()
+            
+            # ⚡ INTERRUPTION DETECTION
+            # If AI is speaking and user starts talking, trigger interruption
+            if self._is_speaking and text.strip() and not is_final:
+                # Check if this is new speech (not just noise)
+                if len(text.split()) >= 2:  # At least 2 words
+                    if current_time - self._last_transcript_time > 0.5:  # 500ms gap
+                        logger.warning("🚨 INTERRUPTION DETECTED!")
+                        if self._on_interruption:
+                            await self._on_interruption()
+                        self._is_speaking = False  # Reset state
+            
+            self._last_transcript_time = current_time
             
             if is_final:
                 self.final_result += f" {text}"
@@ -181,8 +229,6 @@ class DeepgramService:
                 
                 if speech_final:
                     final_text = self.final_result.strip()
-                    
-                    # ⚡ FIX: Track speech end time
                     speech_end_time = time.time()
                     
                     logger.info("=" * 80)
@@ -190,16 +236,16 @@ class DeepgramService:
                     logger.info(f"USER SAID: '{final_text}'")
                     logger.info("=" * 80)
 
-                    # ⚡ FIX: Pass speech_end_time
                     await self._on_speech_end(final_text, speech_end_time)
                     
                     self.final_result = ""
             else:
-                logger.debug(f"Interim: '{text}'")
+                # Log interim results less frequently
+                if len(text.split()) >= 3:  # Only log substantial interim results
+                    logger.debug(f"Interim: '{text}'")
                     
         except Exception as e:
             logger.error(f"Transcript error: {e}")
-            import traceback
             traceback.print_exc()
     
     async def _on_error(self, *args, **kwargs):
@@ -259,16 +305,16 @@ class DeepgramManager:
     def create_connection(
         self,
         call_sid: str,
-        on_speech_end_callback: TranscriptCallback
+        on_speech_end_callback: TranscriptCallback,
+        on_interruption_callback: InterruptionCallback = None
     ) -> DeepgramService:
-
+        """⚡ UPDATED: Support interruption callback"""
         logger.info(f"Creating connection: {call_sid}")
-        service = DeepgramService(on_speech_end_callback)
+        service = DeepgramService(on_speech_end_callback, on_interruption_callback)
         self._connections[call_sid] = service
         return service
     
     async def remove_connection(self, call_sid: str):
-
         if call_sid in self._connections:
             logger.info(f"Removing: {call_sid}")
             service = self._connections.pop(call_sid)

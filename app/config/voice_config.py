@@ -1,4 +1,4 @@
-# app/config/voice_config.py - ULTRA OPTIMIZED
+# app/config/voice_config.py - FINAL OPTIMIZED VERSION
 
 import os
 from dotenv import load_dotenv
@@ -15,7 +15,8 @@ class VoiceAgentConfig:
     TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER")
 
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-    OPENAI_MODEL = os.getenv("OPENAI_MODEL")
+    OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")  # ⚡ Default to GPT-5 mini
+    OPENAI_FAST_MODEL = os.getenv("OPENAI_FAST_MODEL", "gpt-5-nano")  # ⚡ NEW
     OPENAI_VOICE = os.getenv("OPENAI_VOICE")
     OPENAI_TTS_MODEL = os.getenv("OPENAI_TTS_MODEL")
     OPENAI_STT_MODEL = os.getenv("OPENAI_STT_MODEL")
@@ -43,7 +44,7 @@ class VoiceAgentConfig:
     CLINIC_ADDRESS = os.getenv("CLINIC_ADDRESS", "123 Health Street")
     CLINIC_PHONE = os.getenv("CLINIC_PHONE", TWILIO_PHONE_NUMBER)
 
-    # ⚡ OPTIMIZED: 60% shorter system prompt = faster responses
+    # ⚡ ULTRA OPTIMIZED: Minimal system prompt for GPT-5
     SYSTEM_PROMPT = f"""You are an AI assistant for {CLINIC_NAME} helping patients book appointments.
 
 TOOLS:
@@ -79,7 +80,7 @@ GUIDELINES:
             print(f"Missing required environment variables: {', '.join(missing)}")
             return False
         
-        print("Voice agent configuration validated")
+        print("✨ Voice agent configuration validated (GPT-5 OPTIMIZED)")
         return True
 
 

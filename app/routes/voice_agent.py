@@ -1,4 +1,5 @@
-# app\routes\voice_agent.py
+# app/routes/voice_agent.py - COMPLETE OPTIMIZED VERSION
+
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect, Form, Query, Depends
 from fastapi.responses import Response, JSONResponse
 from sqlalchemy.orm import Session
@@ -22,23 +23,27 @@ import time
 from starlette.websockets import WebSocketState
 from app.utils.latency_tracker import latency_tracker
 
-# logging.basicConfig(level=logging.INFO)
-# Use clean logger
 logger = logging.getLogger("voice")
 
 router = APIRouter(prefix="/voice", tags=["Voice Agent"])
 
 call_context: Dict[str, Dict[str, Any]] = {}
 
+# ⚡ NEW: Track active TTS tasks for interruption
+active_tts_tasks = {}
+
+
+# ⚡ HELPER FUNCTION - Updated with interruption support
 async def _generate_and_stream_audio(
     text: str,
     stream_service: StreamService,
     tts_service: any,
     metrics: 'LatencyMetrics',
-    is_partial: bool = False
+    is_partial: bool = False,
+    call_sid: str = None  # ⚡ NEW: For interruption tracking
 ) -> None:
     """
-    ⚡ Helper function to generate and stream audio
+    ⚡ Helper function to generate and stream audio with interruption support
     """
     if not text or not text.strip():
         return
@@ -51,18 +56,35 @@ async def _generate_and_stream_audio(
         
         chunk_count = 0
         
-        async for audio_b64 in tts_service.generate(text):
-            if audio_b64:
-                if chunk_count == 0 and metrics and not is_partial:
-                    metrics.tts_first_chunk = time.time()
-                    ttfa = (metrics.tts_first_chunk - metrics.transcript_received_at) * 1000
-                    logger.info(f"⚡ First audio in {ttfa:.0f}ms")
+        # ⚡ Track this TTS task
+        task_id = str(uuid.uuid4())[:8]
+        if call_sid:
+            if call_sid not in active_tts_tasks:
+                active_tts_tasks[call_sid] = set()
+            active_tts_tasks[call_sid].add(task_id)
+        
+        try:
+            async for audio_b64 in tts_service.generate(text):
+                # ⚡ CHECK FOR INTERRUPTION
+                if call_sid and task_id not in active_tts_tasks.get(call_sid, set()):
+                    logger.warning(f"🚨 TTS task {task_id} cancelled due to interruption")
+                    break
                 
-                chunk_count += 1
-                if metrics:
-                    metrics.tts_chunks_count += chunk_count
-                
-                await stream_service.send_audio_chunk(audio_b64, metrics)
+                if audio_b64:
+                    if chunk_count == 0 and metrics and not is_partial:
+                        metrics.tts_first_chunk = time.time()
+                        ttfa = (metrics.tts_first_chunk - metrics.transcript_received_at) * 1000
+                        logger.info(f"⚡ First audio in {ttfa:.0f}ms")
+                    
+                    chunk_count += 1
+                    if metrics:
+                        metrics.tts_chunks_count += chunk_count
+                    
+                    await stream_service.send_audio_chunk(audio_b64, metrics)
+        finally:
+            # ⚡ Clean up task tracking
+            if call_sid and call_sid in active_tts_tasks:
+                active_tts_tasks[call_sid].discard(task_id)
         
         if not is_partial and metrics:
             metrics.tts_complete = time.time()
@@ -74,6 +96,43 @@ async def _generate_and_stream_audio(
         logger.error(f"❌ TTS error: {e}")
         traceback.print_exc()
 
+
+# ⚡ NEW: Interruption handler
+async def handle_interruption(call_sid: str):
+    """
+    ⚡ NEW: Handle user interruption while AI is speaking
+    """
+    try:
+        logger.warning("🚨 INTERRUPTION: User started speaking while AI was talking")
+        
+        # 1. Cancel all active TTS tasks
+        if call_sid in active_tts_tasks:
+            tasks_to_cancel = active_tts_tasks[call_sid].copy()
+            logger.info(f"🚨 Cancelling {len(tasks_to_cancel)} TTS tasks")
+            active_tts_tasks[call_sid].clear()
+        
+        # 2. Clear audio buffer
+        context = call_context.get(call_sid)
+        if context:
+            stream_service = context.get("stream_service")
+            if stream_service:
+                await stream_service.clear()
+                logger.info("🧹 Audio buffer cleared")
+        
+        # 3. Update Deepgram state
+        context = call_context.get(call_sid)
+        if context:
+            deepgram_service = context.get("deepgram")
+            if deepgram_service:
+                deepgram_service.set_speaking_state(False)
+        
+        logger.info("✅ Interruption handled successfully")
+        
+    except Exception as e:
+        logger.error(f"❌ Error handling interruption: {e}")
+        traceback.print_exc()
+
+
 async def handle_full_transcript(
     call_sid: str,
     transcript: str,
@@ -82,7 +141,7 @@ async def handle_full_transcript(
     speech_end_time: float = None
 ):
     """
-    ⚡ ULTRA OPTIMIZED: Streaming pipeline with sentence buffering
+    ⚡ ULTRA OPTIMIZED: Streaming pipeline with interruption handling
     """
     # Start tracking
     interaction_id = str(uuid.uuid4())[:8]
@@ -102,6 +161,11 @@ async def handle_full_transcript(
     agent: VoiceAgentService = context.get("agent")
     if not agent:
         return
+    
+    # ⚡ Set Deepgram state: AI about to speak
+    deepgram_service = context.get("deepgram")
+    if deepgram_service:
+        deepgram_service.set_speaking_state(True)
     
     try:
         # ⚡ CRITICAL: Use streaming version
@@ -137,12 +201,13 @@ async def handle_full_transcript(
                         
                         # Start TTS generation in parallel
                         tts_task = asyncio.create_task(
-                            _generate_and_stream_audio(  # ⚡ FIX: Remove self.
+                            _generate_and_stream_audio(
                                 sentence_buffer.strip(),
                                 stream_service,
                                 tts_service,
                                 metrics,
-                                is_partial=True
+                                is_partial=True,
+                                call_sid=call_sid  # ⚡ Pass call_sid for interruption
                             )
                         )
                         
@@ -159,12 +224,13 @@ async def handle_full_transcript(
                 
                 # Generate TTS for remaining text
                 if sentence_buffer.strip():
-                    await _generate_and_stream_audio(  # ⚡ FIX: Remove self.
+                    await _generate_and_stream_audio(
                         sentence_buffer.strip(),
                         stream_service,
                         tts_service,
                         metrics,
-                        is_partial=False
+                        is_partial=False,
+                        call_sid=call_sid
                     )
                 
                 break
@@ -175,12 +241,13 @@ async def handle_full_transcript(
         
         # If we never started TTS (response was too short), generate it now
         if not tts_started and text_buffer:
-            await _generate_and_stream_audio(  # ⚡ FIX: Remove self.
+            await _generate_and_stream_audio(
                 text_buffer.strip(),
                 stream_service,
                 tts_service,
                 metrics,
-                is_partial=False
+                is_partial=False,
+                call_sid=call_sid
             )
         
         # Log the AI response
@@ -190,12 +257,20 @@ async def handle_full_transcript(
                 preview = response_text[:100] + ('...' if len(response_text) > 100 else '')
                 logger.info(f"💬 AI: '{preview}'")
         
+        # ⚡ Reset Deepgram state: AI finished speaking
+        if deepgram_service:
+            deepgram_service.set_speaking_state(False)
+        
         # Complete tracking
         latency_tracker.complete_interaction(interaction_id)
         
     except Exception as e:
         logger.error(f"❌ Error: {e}")
         traceback.print_exc()
+        
+        # ⚡ Reset state on error
+        if deepgram_service:
+            deepgram_service.set_speaking_state(False)
         
         try:
             latency_tracker.complete_interaction(interaction_id)
@@ -215,6 +290,7 @@ async def handle_full_transcript(
 
         except Exception as err:
             logger.error(f"❌ Error recovery failed: {err}")
+
 
 @router.post("/incoming")
 async def handle_incoming_call(
@@ -281,8 +357,7 @@ async def handle_incoming_call(
 @router.websocket("/stream")
 async def websocket_stream(websocket: WebSocket):
     """
-    Handle Twilio Media Stream WebSocket connection.
-    Integrates: Deepgram STT -> VoiceAgentService -> AI Tools -> TTS -> Twilio
+    ⚡ OPTIMIZED: Handle Twilio Media Stream WebSocket with interruption support
     """
     
     # Accept WebSocket
@@ -381,11 +456,13 @@ async def websocket_stream(websocket: WebSocket):
         
         logger.info("Initializing Deepgram STT...")
         try:
+            # ⚡ UPDATED: Create Deepgram with interruption callback
             deepgram_service = deepgram_manager.create_connection(
                 call_sid=call_sid,
                 on_speech_end_callback=lambda transcript, speech_end_time: asyncio.create_task(
                     handle_full_transcript(call_sid, transcript, stream_service, tts_service, speech_end_time)
-                )
+                ),
+                on_interruption_callback=lambda: asyncio.create_task(handle_interruption(call_sid))  # ⚡ NEW
             )
 
             
@@ -510,7 +587,6 @@ async def websocket_stream(websocket: WebSocket):
                             has_sent_greeting = True
                         except Exception as e:
                             logger.error(f"✗ Greeting error: {e}")
-                            import traceback
                             traceback.print_exc()
                 
                 elif event == "media":
@@ -547,6 +623,11 @@ async def websocket_stream(websocket: WebSocket):
         # Cleanup
         logger.info(f"\n{'=' * 80}")
         logger.info("Cleaning up...")
+        
+        # ⚡ Clean up TTS tasks
+        if call_sid in active_tts_tasks:
+            active_tts_tasks[call_sid].clear()
+            del active_tts_tasks[call_sid]
         
         if deepgram_service and deepgram_manager:
             try:
