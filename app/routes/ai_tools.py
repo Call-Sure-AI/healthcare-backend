@@ -160,7 +160,7 @@ AI_FUNCTIONS = [
 def search_doctor_information(query: str, top_k: int = 3) -> List[Dict[str, Any]]:
     print(f"\n--- Executing Qdrant Search ---")
     print(f"Query: '{query}', Top K: {top_k}")
-    if not qdrant_client or not embedding_model:
+    if not qdrant_client:
         error_msg = "Qdrant client or embedding model not initialized."
         print(f"Error: {error_msg}")
         return [{"success": False, "error": error_msg}]

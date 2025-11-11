@@ -98,7 +98,7 @@ class OpenAIService:
         compress: bool = True
     ) -> List[Dict[str, str]]:
         """
-        ⚡ OPTIMIZED: Keep last 15 messages for context
+        ⚡ FIXED: Smart compression that preserves tool call pairs
         """
         messages = []
         
@@ -110,18 +110,36 @@ class OpenAIService:
 
             enhanced_system_prompt = f"""{self.system_prompt}
 
-Today: {day_of_week}, {current_date_str}
-Year: {current_year}
-Date format: YYYY-MM-DD"""
+            Today: {day_of_week}, {current_date_str}
+            Year: {current_year}
+            Date format: YYYY-MM-DD"""
             
             messages.append({
                 "role": "system",
                 "content": enhanced_system_prompt
             })
 
-        # ⚡ OPTIMIZED: Keep last 15 messages (good context + speed balance)
+        # ⚡ SMART COMPRESSION: Preserve tool call pairs
         if compress and len(conversation_history) > 15:
-            messages.extend(conversation_history[-15:])
+            # Find where to start keeping messages
+            keep_from = len(conversation_history) - 15
+            
+            # Back up to find a safe boundary (not in middle of tool call)
+            for i in range(keep_from, max(0, keep_from - 5), -1):
+                msg = conversation_history[i]
+                role = msg.get("role")
+                
+                # Safe to start if it's a user or system message
+                if role in ["user", "system"]:
+                    keep_from = i
+                    break
+                # Also safe if it's assistant without tool_calls
+                elif role == "assistant" and not msg.get("tool_calls"):
+                    keep_from = i
+                    break
+            
+            # Keep from safe boundary onwards
+            messages.extend(conversation_history[keep_from:])
         else:
             messages.extend(conversation_history)
         

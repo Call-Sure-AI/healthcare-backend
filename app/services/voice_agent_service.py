@@ -1,4 +1,4 @@
-# app/services/voice_agent_service.py - ULTRA OPTIMIZED
+# app/services/voice_agent_service.py - FIXED
 
 from typing import Dict, Any, Optional, List, AsyncGenerator
 from sqlalchemy.orm import Session
@@ -69,14 +69,7 @@ class VoiceAgentService:
         metrics: 'LatencyMetrics' = None
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
-        ⚡ NEW: STREAMING version - yields response chunks as they're generated
-        This is the MAIN optimization for low latency!
-        
-        Yields:
-            Dict with 'type' and 'data':
-            - type: 'text' -> data: text chunk
-            - type: 'complete' -> data: full result dict
-            - type: 'error' -> data: error message
+        ⚡ FIXED: STREAMING version with proper tool call storage
         """
         try:
             redis_service.append_to_conversation(call_sid, "user", user_text)
@@ -89,11 +82,11 @@ class VoiceAgentService:
             conversation_history = session.get("conversation_history", [])
             ai_functions_schema = get_ai_functions()
             
-            # ⚡ OPTIMIZATION: Check cache first
+            # ⚡ Check cache first
             query_hash = redis_service.hash_query(user_text)
             cached_response = redis_service.get_cached_response(query_hash)
             
-            if cached_response and not metrics:  # Don't use cache during testing
+            if cached_response and not metrics:
                 logger.info("⚡ Cache hit!")
                 yield {"type": "text", "data": cached_response}
                 yield {"type": "complete", "data": {
@@ -137,7 +130,7 @@ class VoiceAgentService:
                     metrics.tool_name = function_name
                     metrics.tool_execution_start = time.time()
                 
-                # ⚡ OPTIMIZATION: Check tool cache
+                # ⚡ Check tool cache
                 args_hash = redis_service.hash_query(json.dumps(function_args, sort_keys=True))
                 cached_tool_result = redis_service.get_cached_tool_result(function_name, args_hash)
                 
@@ -145,23 +138,20 @@ class VoiceAgentService:
                     logger.info(f"⚡ Tool cache hit: {function_name}")
                     function_result = cached_tool_result
                 else:
-                    # Store tool call in conversation
-                    session = redis_service.get_session(call_sid)
-                    if session:
-                        conversation_history = session.get("conversation_history", [])
-                        conversation_history.append({
-                            "role": "assistant",
-                            "content": None,
-                            "tool_calls": [{
-                                "id": tool_call_id,
-                                "type": "function",
-                                "function": {
-                                    "name": function_name,
-                                    "arguments": json.dumps(function_args)
-                                }
-                            }]
-                        })
-                        redis_service.update_session(call_sid, {"conversation_history": conversation_history})
+                    # ⚡ FIXED: Store tool call properly
+                    redis_service.append_to_conversation(
+                        call_sid, 
+                        "assistant", 
+                        content=None,
+                        tool_calls=[{
+                            "id": tool_call_id,
+                            "type": "function",
+                            "function": {
+                                "name": function_name,
+                                "arguments": json.dumps(function_args)
+                            }
+                        }]
+                    )
                     
                     # Execute tool
                     function_result = self.ai_tools.execute_function(function_name, function_args)
@@ -174,19 +164,16 @@ class VoiceAgentService:
                     tool_ms = (metrics.tool_execution_end - metrics.tool_execution_start) * 1000
                     logger.info(f"   Tool exec: {tool_ms:.0f}ms")
                 
-                # Store tool result
-                session = redis_service.get_session(call_sid)
-                if session:
-                    conversation_history = session.get("conversation_history", [])
-                    conversation_history.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call_id,
-                        "name": function_name,
-                        "content": json.dumps(function_result)
-                    })
-                    redis_service.update_session(call_sid, {"conversation_history": conversation_history})
+                # ⚡ FIXED: Store tool result properly
+                redis_service.append_to_conversation(
+                    call_sid, 
+                    "tool",
+                    content=json.dumps(function_result),
+                    tool_call_id=tool_call_id,
+                    name=function_name
+                )
                 
-                # ⚡ CRITICAL: STREAMING second LLM call
+                # ⚡ STREAMING second LLM call
                 session = redis_service.get_session(call_sid)
                 updated_history = session.get("conversation_history", [])
                 
@@ -196,7 +183,7 @@ class VoiceAgentService:
                 messages = openai_service.build_conversation_messages(
                     updated_history, 
                     include_system=True,
-                    compress=True  # ⚡ Enable compression
+                    compress=True
                 )
                 
                 # ⚡ STREAM THE RESPONSE
@@ -205,7 +192,7 @@ class VoiceAgentService:
                 
                 async for chunk in openai_service.generate_response_streaming(
                     messages=messages,
-                    temperature=0.5
+                    temperature=0.4
                 ):
                     if chunk:
                         full_response += chunk
@@ -284,7 +271,7 @@ class VoiceAgentService:
     ) -> Dict[str, Any]:
         """
         ⚡ KEPT FOR BACKWARD COMPATIBILITY
-        Non-streaming version - collects all chunks and returns complete response
+        Non-streaming version
         """
         full_response = ""
         result = None

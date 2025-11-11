@@ -1,8 +1,8 @@
-# app/services/redis_service.py - ULTRA OPTIMIZED
+# app/services/redis_service.py - FIXED WITH TOOL CALL SUPPORT
 
 import json
 import redis
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
 from app.config.redis_config import get_redis_client
 from app.config.voice_config import voice_config
@@ -20,7 +20,7 @@ class RedisService:
         return f"call_session:{call_sid}"
     
     def _get_cache_key(self, prefix: str, identifier: str) -> str:
-        """⚡ NEW: Generate cache keys"""
+        """⚡ Generate cache keys"""
         return f"cache:{prefix}:{identifier}"
 
     def create_session(self, call_sid: str, session_data: Dict[str, Any]) -> bool:
@@ -76,7 +76,18 @@ class RedisService:
             logger.error(f"❌ Error updating session: {e}")
             return False
 
-    def append_to_conversation(self, call_sid: str, role: str, content: str) -> bool:
+    def append_to_conversation(
+        self, 
+        call_sid: str, 
+        role: str, 
+        content: str = None,
+        tool_calls: List[Dict] = None,
+        tool_call_id: str = None,
+        name: str = None
+    ) -> bool:
+        """
+        ⚡ FIXED: Support tool calls and tool responses
+        """
         try:
             session = self.get_session(call_sid)
             if not session:
@@ -87,9 +98,24 @@ class RedisService:
 
             message = {
                 "role": role,
-                "content": content,
                 "timestamp": datetime.now().isoformat()
             }
+            
+            # Add content if provided
+            if content is not None:
+                message["content"] = content
+            
+            # Add tool_calls if provided (for assistant messages)
+            if tool_calls:
+                message["tool_calls"] = tool_calls
+            
+            # Add tool_call_id if provided (for tool response messages)
+            if tool_call_id:
+                message["tool_call_id"] = tool_call_id
+            
+            # Add name if provided (for tool response messages)
+            if name:
+                message["name"] = name
 
             session['conversation_history'].append(message)
 
@@ -100,7 +126,7 @@ class RedisService:
             logger.error(f"❌ Error appending to conversation: {e}")
             return False
 
-    # ⚡ NEW: Response caching methods
+    # ⚡ Response caching methods
     def cache_response(
         self, 
         query_hash: str, 
@@ -108,7 +134,7 @@ class RedisService:
         ttl: int = 3600
     ) -> bool:
         """
-        ⚡ NEW: Cache AI responses for common queries
+        ⚡ Cache AI responses for common queries
         """
         try:
             key = self._get_cache_key("response", query_hash)
@@ -121,14 +147,14 @@ class RedisService:
     
     def get_cached_response(self, query_hash: str) -> Optional[str]:
         """
-        ⚡ NEW: Retrieve cached response
+        ⚡ Retrieve cached response
         """
         try:
             key = self._get_cache_key("response", query_hash)
             data = self.redis_client.get(key)
             if data:
                 logger.debug(f"✓ Cache hit: {query_hash[:8]}")
-                return data
+                return data.decode('utf-8') if isinstance(data, bytes) else data
             return None
         except Exception as e:
             logger.error(f"❌ Cache retrieval error: {e}")
@@ -142,7 +168,7 @@ class RedisService:
         ttl: int = 300  # 5 minutes for tool results
     ) -> bool:
         """
-        ⚡ NEW: Cache tool execution results
+        ⚡ Cache tool execution results
         """
         try:
             key = self._get_cache_key(f"tool:{tool_name}", args_hash)
@@ -159,14 +185,15 @@ class RedisService:
         args_hash: str
     ) -> Optional[Dict[str, Any]]:
         """
-        ⚡ NEW: Get cached tool result
+        ⚡ Get cached tool result
         """
         try:
             key = self._get_cache_key(f"tool:{tool_name}", args_hash)
             data = self.redis_client.get(key)
             if data:
                 logger.debug(f"✓ Tool cache hit: {tool_name}")
-                return json.loads(data)
+                data_str = data.decode('utf-8') if isinstance(data, bytes) else data
+                return json.loads(data_str)
             return None
         except Exception as e:
             logger.error(f"❌ Tool cache retrieval error: {e}")
@@ -174,7 +201,7 @@ class RedisService:
     
     @staticmethod
     def hash_query(text: str) -> str:
-        """⚡ NEW: Generate hash for caching"""
+        """⚡ Generate hash for caching"""
         return hashlib.md5(text.lower().strip().encode()).hexdigest()
 
     def delete_session(self, call_sid: str) -> bool:
