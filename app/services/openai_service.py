@@ -1,4 +1,4 @@
-# app/services/openai_service.py - OPTIMIZED WITH MAX_TOKENS
+# app/services/openai_service.py - ULTRA FAST VERSION
 
 import openai
 import json
@@ -53,21 +53,21 @@ class OpenAIService:
         self,
         messages: List[Dict[str, str]],
         functions: Optional[List[Dict[str, Any]]] = None,
-        temperature: float = 0.4,  # ⚡ OPTIMIZED: Faster generation
+        temperature: float = 0.6,  # ⚡ FASTER: Increased from 0.4
         stream: bool = False,
         use_fast_model: bool = False
     ):
         """
-        ⚡ OPTIMIZED: Smart max_tokens based on context
+        ⚡ ULTRA FAST: Optimized for speed
         """
         try:
             model = self.fast_model if use_fast_model else self.smart_model
             
-            # ⚡ SMART MAX_TOKENS: Different for tool calls vs text
+            # ⚡ SMART MAX_TOKENS: Optimized for speed
             if functions:
-                max_tokens = 200  # Tool calls need more tokens for JSON structure
+                max_tokens = 150  # Reduced from 200 (still enough for tool calls)
             else:
-                max_tokens = 100  # Text responses should be brief
+                max_tokens = 70   # Reduced from 100 (brief responses)
             
             params = {
                 "model": model,
@@ -98,7 +98,7 @@ class OpenAIService:
         compress: bool = True
     ) -> List[Dict[str, str]]:
         """
-        ⚡ FIXED: Smart compression that preserves tool call pairs
+        ⚡ ULTRA FAST: Aggressive compression
         """
         messages = []
         
@@ -110,35 +110,31 @@ class OpenAIService:
 
             enhanced_system_prompt = f"""{self.system_prompt}
 
-            Today: {day_of_week}, {current_date_str}
-            Year: {current_year}
-            Date format: YYYY-MM-DD"""
+Today: {day_of_week}, {current_date_str}
+Year: {current_year}
+Date format: YYYY-MM-DD"""
             
             messages.append({
                 "role": "system",
                 "content": enhanced_system_prompt
             })
 
-        # ⚡ SMART COMPRESSION: Preserve tool call pairs
-        if compress and len(conversation_history) > 15:
-            # Find where to start keeping messages
-            keep_from = len(conversation_history) - 15
+        # ⚡ AGGRESSIVE COMPRESSION: Last 10 messages (reduced from 15)
+        if compress and len(conversation_history) > 10:
+            keep_from = len(conversation_history) - 10
             
-            # Back up to find a safe boundary (not in middle of tool call)
+            # Find safe boundary
             for i in range(keep_from, max(0, keep_from - 5), -1):
                 msg = conversation_history[i]
                 role = msg.get("role")
                 
-                # Safe to start if it's a user or system message
                 if role in ["user", "system"]:
                     keep_from = i
                     break
-                # Also safe if it's assistant without tool_calls
                 elif role == "assistant" and not msg.get("tool_calls"):
                     keep_from = i
                     break
             
-            # Keep from safe boundary onwards
             messages.extend(conversation_history[keep_from:])
         else:
             messages.extend(conversation_history)
@@ -149,20 +145,20 @@ class OpenAIService:
         self,
         messages: List[Dict[str, str]],
         functions: Optional[List[Dict[str, Any]]] = None,
-        temperature: float = 0.4,
+        temperature: float = 0.6,  # ⚡ FASTER
         use_fast_model: bool = False
     ) -> AsyncGenerator[str, None]:
         """
-        ⚡ OPTIMIZED: Streaming with smart max_tokens
+        ⚡ ULTRA FAST: Streaming with optimized settings
         """
         try:
             model = self.fast_model if use_fast_model else self.smart_model
             
             # ⚡ Smart max_tokens
             if functions:
-                max_tokens = 200
+                max_tokens = 150
             else:
-                max_tokens = 100
+                max_tokens = 70
             
             params = {
                 "model": model,
@@ -216,7 +212,7 @@ class OpenAIService:
         available_functions: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
         """
-        ⚡ OPTIMIZED: Process with smart max_tokens
+        ⚡ ULTRA FAST: Process user input
         """
         try:
             messages = self.build_conversation_messages(
@@ -225,13 +221,12 @@ class OpenAIService:
             )
             messages.append({"role": "user", "content": user_message})
 
-            # Use fast model only if no functions
             use_fast = (available_functions is None or len(available_functions) == 0)
             
             response = await self.chat_completion(
                 messages=messages,
                 functions=available_functions,
-                temperature=0.4,
+                temperature=0.6,  # ⚡ FASTER
                 use_fast_model=use_fast
             )
             
@@ -274,11 +269,11 @@ class OpenAIService:
     async def generate_response_streaming(
         self,
         messages: List[Dict[str, str]],
-        temperature: float = 0.4,
+        temperature: float = 0.6,  # ⚡ FASTER
         use_fast_model: bool = False
     ) -> AsyncGenerator[str, None]:
         """
-        ⚡ OPTIMIZED: Generate brief streaming response
+        ⚡ ULTRA FAST: Generate streaming response
         """
         try:
             model = self.fast_model if use_fast_model else self.smart_model
@@ -287,7 +282,7 @@ class OpenAIService:
                 model=model,
                 messages=messages,
                 temperature=temperature,
-                max_tokens=100,  # ⚡ Brief responses
+                max_tokens=70,  # ⚡ Brief responses
                 stream=True
             )
             
