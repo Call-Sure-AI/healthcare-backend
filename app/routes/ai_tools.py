@@ -1,4 +1,4 @@
-# app/routes/ai_tools.py - AI-POWERED INTELLIGENT DOCTOR RECOMMENDATION
+# app/routes/ai_tools.py - CONVERSATIONAL FLOW WITH AI REASONING
 
 from datetime import date, datetime, timedelta
 from typing import Dict, Any, List, Optional
@@ -48,16 +48,16 @@ def get_openai_embedding(query: str, model=OPENAI_EMBEDDING_MODEL_NAME) -> list:
 
 def get_ai_specialization_recommendations(symptom: str) -> List[str]:
     """
-    ⚡ AI REASONING: Let GPT-4 determine which specializations can treat the symptom
+    ⚡ AI REASONING: GPT-4 determines which specializations treat the symptom
     """
     try:
         print(f"\n🧠 AI Reasoning: Which specialists treat '{symptom}'?")
         
         prompt = f"""Given symptom/condition: "{symptom}"
 
-List medical specializations that can treat this, in priority order (best first).
+List medical specializations that can treat this, in priority order.
 
-Return ONLY a JSON array of specialization names.
+Return ONLY a JSON array of specialization names, nothing else.
 Example: ["Neurology", "General Medicine", "Psychiatry"]
 
 Include General Medicine as fallback if applicable.
@@ -71,6 +71,10 @@ Max 4 specializations."""
         )
         
         result = response.choices[0].message.content.strip()
+        
+        # Clean up response (remove markdown if present)
+        result = result.replace('```json', '').replace('```', '').strip()
+        
         specializations = json.loads(result)
         
         print(f"✅ AI recommended: {specializations}")
@@ -78,12 +82,13 @@ Max 4 specializations."""
         
     except Exception as e:
         print(f"❌ AI reasoning error: {e}")
+        print(f"Raw response: {result if 'result' in locals() else 'N/A'}")
         return ["General Medicine"]
 
 
 def fuzzy_match_doctor_name(query: str, available_doctors: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """
-    ⚡ Fuzzy match doctor names (handles STT errors like "Anu" → "Aarav")
+    ⚡ Fuzzy match doctor names (handles STT errors)
     """
     if not query or not available_doctors:
         return None
@@ -127,7 +132,7 @@ def search_doctor_information(query: str, top_k: int = 3) -> Dict[str, Any]:
     """
     print(f"\n--- RAG Search: '{query}' ---")
     
-    # STEP 1: Try fuzzy name matching first (for name-based queries)
+    # STEP 1: Try fuzzy name matching
     try:
         from app.config.database import SessionLocal
         db = SessionLocal()
@@ -154,7 +159,7 @@ def search_doctor_information(query: str, top_k: int = 3) -> Dict[str, Any]:
     except Exception as e:
         print(f"Fuzzy match error: {e}")
     
-    # STEP 2: RAG semantic search (for expertise/symptom queries)
+    # STEP 2: RAG semantic search
     if not qdrant_client:
         return {"success": False, "error": "Qdrant not available"}
     
@@ -185,7 +190,7 @@ def enrich_doctors_with_rag(
     user_context: str
 ) -> List[Dict[str, Any]]:
     """
-    ⚡ RAG ENRICHMENT: Add experience context (optional, ~100ms)
+    ⚡ RAG ENRICHMENT: Add experience context
     """
     if not doctors or not user_context or not qdrant_client:
         return doctors
@@ -199,7 +204,6 @@ def enrich_doctors_with_rag(
         name = doctor.get("name", "")
         
         try:
-            # Query RAG for doctor + symptom
             search_query = f"{name} {user_context}"
             rag_result = search_doctor_information(search_query, top_k=1)
             
@@ -211,7 +215,6 @@ def enrich_doctors_with_rag(
                     expertise = result.get("expertise", "")
                     combined = f"{bio} {expertise}".lower()
                     
-                    # Check if relevant to symptom
                     if any(word in combined for word in user_context.lower().split()):
                         doctor_copy["has_experience"] = True
                         print(f"  ✓ {name}: Has relevant experience")
@@ -263,13 +266,13 @@ def find_doctors_by_specializations(
 AI_FUNCTIONS = [
     {
         "name": "search_doctor_information",
-        "description": "Search for doctor by name (handles typos/STT errors like 'Anu Patel' → 'Aarav Patel') or get expertise info",
+        "description": "Search for specific doctor by name. Handles typos/STT errors (e.g., 'Anu Patel' → 'Aarav Patel'). Use when patient requests specific doctor by name.",
         "parameters": {
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Doctor name or expertise query",
+                    "description": "Doctor name (e.g., 'Dr. Sharma', 'Anu Patel')",
                 },
                 "top_k": {"type": "integer", "default": 3}
             },
@@ -278,16 +281,16 @@ AI_FUNCTIONS = [
     },
     {
         "name": "get_available_doctors",
-        "description": "Get intelligent doctor recommendations. AI analyzes symptoms and recommends appropriate specialists with reasons.",
+        "description": "Get available doctors ONLY AFTER patient has chosen specialist type in Stage 3. AI analyzes full context (symptoms + duration + chosen specialization) to recommend specific doctors with reasons. DO NOT call this in Stage 1 or Stage 2.",
         "parameters": {
             "type": "object",
             "properties": {
                 "user_context": {
                     "type": "string",
-                    "description": "Patient's symptoms/condition (e.g., 'headache', 'fever')"
+                    "description": "COMPLETE context including: symptoms + duration + severity + chosen specialist type. Example: 'headache 3 days mild pain, patient wants General Medicine' or 'fever 102F with cough, patient prefers General Medicine'"
                 }
             },
-            "required": []
+            "required": ["user_context"]
         }
     },
     {
@@ -395,7 +398,7 @@ class AIToolsExecutor:
         """
         try:            
             print(f"\n{'='*80}")
-            print(f"🧠 AI-POWERED DOCTOR RECOMMENDATION")
+            print(f"🧠 AI-POWERED DOCTOR RECOMMENDATION (STAGE 3)")
             print(f"User context: '{user_context}'")
             print(f"{'='*80}\n")
             
@@ -441,7 +444,7 @@ class AIToolsExecutor:
                 max_results=3
             )
             
-            # ⚡ STEP 3: RAG enrichment (optional, ~100ms)
+            # ⚡ STEP 3: RAG enrichment
             if user_context:
                 recommended_doctors = enrich_doctors_with_rag(
                     recommended_doctors,
@@ -454,7 +457,7 @@ class AIToolsExecutor:
                 has_exp = doc.get("has_experience", False)
                 
                 if has_exp:
-                    doc["recommendation_reason"] = f"{spec}, experienced with {user_context}"
+                    doc["recommendation_reason"] = f"{spec}, experienced with similar cases"
                 elif spec != "available":
                     doc["recommendation_reason"] = f"{spec} specialist"
                 else:
@@ -551,7 +554,7 @@ class AIToolsExecutor:
         return date_str
 
     def _find_doctor_id_by_name(self, doctor_name: str) -> str:
-        """Find doctor by name (fuzzy)"""
+        """Find doctor by name"""
         try:
             doctors = DoctorService.get_all_doctors(self.db)
             doctor_name_clean = doctor_name.lower().replace('dr.', '').replace('dr', '').replace('doctor', '').strip()
