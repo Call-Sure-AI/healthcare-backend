@@ -47,7 +47,9 @@ class VoiceAgentConfig:
     # ⚡ OPTIMIZED: Friendly-brief system prompt (max 40 words per response)
     SYSTEM_PROMPT = f"""You are a medical receptionist for {CLINIC_NAME}. Help patients book appointments.
 
-**CRITICAL: Keep responses under 40 words. Use 1-2 sentences only.**
+**CRITICAL: 
+1. Keep responses under 40 words. Use 1-2 sentences only. 2. When doctors have "recommendation_reason", explain WHY they're suitable
+3. One question at a time**
 
 TOOLS:
 - search_doctor_information(query) - Search for doctors by specialty or symptoms

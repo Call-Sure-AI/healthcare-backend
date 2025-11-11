@@ -1,11 +1,11 @@
-# app\routes\ai_tools.py
+# app/routes/ai_tools.py - AI-POWERED INTELLIGENT DOCTOR RECOMMENDATION
+
 from datetime import date, datetime, timedelta
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from sqlalchemy.orm import Session
 from app.services.doctor_service import DoctorService
 from app.services.appointment_service import AppointmentService
 from app.models.leave import DoctorLeave
-from app.utils.symptom_mapper import extract_specialization_from_text, filter_doctors_by_specialization
 from app.schemas.appointment import AppointmentCreate
 from qdrant_client import QdrantClient, models
 from app.config.voice_config import voice_config
@@ -13,10 +13,10 @@ import re
 from fastapi import HTTPException
 from collections import Counter
 import traceback
-import re
 import json
 import openai
 import os
+from difflib import SequenceMatcher
 
 try:
     qdrant_client = QdrantClient(host=voice_config.QDRANT_HOST, port=voice_config.QDRANT_PORT, api_key=voice_config.QDRANT_API_KEY, https=False)
@@ -36,6 +36,7 @@ except Exception as e:
     print(f"Failed to set up OpenAI embedding model: {e}")
     VECTOR_SIZE = 0
 
+
 def get_openai_embedding(query: str, model=OPENAI_EMBEDDING_MODEL_NAME) -> list:
     try:
         response = openai.embeddings.create(input=[query], model=model)
@@ -44,132 +45,123 @@ def get_openai_embedding(query: str, model=OPENAI_EMBEDDING_MODEL_NAME) -> list:
         print(f"Error getting OpenAI embedding: {e}")
         return None
 
-qdrant_search_schema = {
-    "name": "search_doctor_information",
-    "description": "Searches for doctor profiles based on specialization, name, symptoms mentioned, or other descriptive queries. Use this for general information retrieval about doctors.",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "query": {
-                "type": "string",
-                "description": "The search query (e.g., 'neurology specialist', 'doctor vance details', 'heart doctor available', 'doctor for chest pain')",
-            },
-            "top_k": {
-                "type": "integer",
-                "description": "Number of results to return",
-                "default": 3
+
+def get_ai_specialization_recommendations(symptom: str) -> List[str]:
+    """
+    ⚡ AI REASONING: Let GPT-4 determine which specializations can treat the symptom
+    """
+    try:
+        print(f"\n🧠 AI Reasoning: Which specialists treat '{symptom}'?")
+        
+        prompt = f"""Given symptom/condition: "{symptom}"
+
+List medical specializations that can treat this, in priority order (best first).
+
+Return ONLY a JSON array of specialization names.
+Example: ["Neurology", "General Medicine", "Psychiatry"]
+
+Include General Medicine as fallback if applicable.
+Max 4 specializations."""
+
+        response = openai.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=100
+        )
+        
+        result = response.choices[0].message.content.strip()
+        specializations = json.loads(result)
+        
+        print(f"✅ AI recommended: {specializations}")
+        return specializations
+        
+    except Exception as e:
+        print(f"❌ AI reasoning error: {e}")
+        return ["General Medicine"]
+
+
+def fuzzy_match_doctor_name(query: str, available_doctors: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """
+    ⚡ Fuzzy match doctor names (handles STT errors like "Anu" → "Aarav")
+    """
+    if not query or not available_doctors:
+        return None
+    
+    query_clean = query.lower().strip()
+    query_clean = query_clean.replace('dr.', '').replace('dr', '').replace('doctor', '').strip()
+    
+    best_match = None
+    best_score = 0.0
+    
+    for doctor in available_doctors:
+        doctor_name = doctor["name"].lower().replace('dr.', '').replace('dr', '').strip()
+        
+        similarity = SequenceMatcher(None, query_clean, doctor_name).ratio()
+        
+        query_words = query_clean.split()
+        doctor_words = doctor_name.split()
+        
+        for qword in query_words:
+            if len(qword) < 3:
+                continue
+            for dword in doctor_words:
+                word_sim = SequenceMatcher(None, qword, dword).ratio()
+                if word_sim > similarity:
+                    similarity = word_sim
+        
+        if similarity > best_score:
+            best_score = similarity
+            best_match = doctor
+    
+    if best_score > 0.6:
+        print(f"✓ Fuzzy match: {best_match['name']} (score: {best_score:.2f})")
+        return best_match
+    
+    return None
+
+
+def search_doctor_information(query: str, top_k: int = 3) -> Dict[str, Any]:
+    """
+    ⚡ HYBRID: Fuzzy name matching + RAG semantic search
+    """
+    print(f"\n--- RAG Search: '{query}' ---")
+    
+    # STEP 1: Try fuzzy name matching first (for name-based queries)
+    try:
+        from app.config.database import SessionLocal
+        db = SessionLocal()
+        all_doctors = DoctorService.get_all_active_doctors(db)
+        db.close()
+        
+        available_doctors = [
+            {
+                "doctor_id": doc.doctor_id,
+                "name": doc.name,
+                "degree": doc.degree,
+                "specialization": doc.specialization or "General Medicine"
             }
-        },
-        "required": ["query"],
-    },
-}
-
-AI_FUNCTIONS = [
-    qdrant_search_schema,
-    {
-        "name": "get_available_doctors",
-        "description": (
-            "Get a list of available doctors filtered by patient's symptoms or specialization needs. "
-            "This function will automatically detect if the patient mentioned symptoms (e.g., 'chest pain', "
-            "'skin rash', 'child vaccination') and return relevant specialists. If no symptoms are mentioned "
-            "or no specialists match, it returns up to 5 general doctors."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "user_context": {
-                    "type": "string",
-                    "description": "The patient's reason for visit, symptoms, or any context from the conversation"
-                }
-            },
-            "required": []
-        }
-    },
-    {
-        "name": "get_doctor_schedule",
-        "description": "Finds the next available DATES for a single, specific doctor. Use this ONLY when the user asks for a doctor's availability but has NOT provided a specific date.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "doctor_id": {
-                    "type": "string",
-                    "description": "The exact doctor_id of the doctor (e.g., DOC2005)."
-                }
-            },
-            "required": ["doctor_id"]
-        }
-    },
-    {
-        "name": "get_available_slots",
-        "description": "Gets the available appointment TIME SLOTS for a doctor on ONE specific date. Use this ONLY after you have confirmed both the doctor and the exact date with the user.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "doctor_id": {
-                    "type": "string",
-                    "description": "The exact doctor_id for the appointment."
-                },
-                "date": {
-                    "type": "string",
-                    "description": "The specific date for the appointment in YYYY-MM-DD format."
-                }
-            },
-            "required": ["doctor_id", "date"]
-        }
-    },
-    {
-        "name": "get_appointment_details",
-        "description": "Fetch the details of an existing scheduled appointment for a patient using their name and phone number. Use this if the user asks 'where is my appointment?' or 'what are my booking details?'.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "patient_name": {
-                    "type": "string", 
-                    "description": "The full name of the patient."
-                },
-                "patient_phone": {
-                    "type": "string", 
-                    "description": "The patient's phone number."
-                }
-            },
-            "required": ["patient_name", "patient_phone"]
-        }
-    },
-    {
-        "name": "book_appointment_in_hour_range",
-        "description": "Book an appointment within a specified hour range (e.g., '2 PM', '10-11 AM'). The system will automatically find and book the first available 15-minute slot in that hour.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "patient_name": {"type": "string"},
-                "patient_phone": {"type": "string"},
-                "doctor_id": {"type": "string"},
-                "appointment_date": {"type": "string"},
-                "time_range": {
-                    "type": "string",
-                    "description": "The desired hour for the appointment, e.g., '3 PM' or 'between 10 and 11 AM'."
-                },
-                "reason": {"type": "string"}
-            },
-            "required": ["patient_name", "patient_phone", "doctor_id", "appointment_date", "time_range"]
-        }
-    },
-]
-
-
-def search_doctor_information(query: str, top_k: int = 3) -> List[Dict[str, Any]]:
-    print(f"\n--- Executing Qdrant Search ---")
-    print(f"Query: '{query}', Top K: {top_k}")
+            for doc in all_doctors
+        ]
+        
+        fuzzy_match = fuzzy_match_doctor_name(query, available_doctors)
+        if fuzzy_match:
+            return {
+                "success": True,
+                "results": [fuzzy_match],
+                "matched_via": "fuzzy_name"
+            }
+    except Exception as e:
+        print(f"Fuzzy match error: {e}")
+    
+    # STEP 2: RAG semantic search (for expertise/symptom queries)
     if not qdrant_client:
-        error_msg = "Qdrant client or embedding model not initialized."
-        print(f"Error: {error_msg}")
-        return [{"success": False, "error": error_msg}]
+        return {"success": False, "error": "Qdrant not available"}
+    
     try:
         query_vector = get_openai_embedding(query)
-        if query_vector is None:
-            error_msg = "Failed to obtain embedding from OpenAI."
-            print(f"Error: {error_msg}")
-            return {"success": False, "error": error_msg}
+        if not query_vector:
+            return {"success": False, "error": "Embedding failed"}
 
         search_result = qdrant_client.search(
             collection_name=voice_config.QDRANT_COLLECTION_NAME,
@@ -179,14 +171,178 @@ def search_doctor_information(query: str, top_k: int = 3) -> List[Dict[str, Any]
         )
 
         results = [hit.payload for hit in search_result]
-        print(f"Qdrant returned {len(results)} results.")
-        print(f"--- Qdrant Search Complete ---\n")
+        print(f"✓ RAG: {len(results)} results")
         return {"success": True, "results": results}
+        
     except Exception as e:
-        error_msg = f"Error during Qdrant search: {e}"
-        print(f"Error: {error_msg}")
+        print(f"RAG error: {e}")
         traceback.print_exc()
-        return {"success": False, "error": error_msg, "results": []}
+        return {"success": False, "error": str(e)}
+
+
+def enrich_doctors_with_rag(
+    doctors: List[Dict[str, Any]],
+    user_context: str
+) -> List[Dict[str, Any]]:
+    """
+    ⚡ RAG ENRICHMENT: Add experience context (optional, ~100ms)
+    """
+    if not doctors or not user_context or not qdrant_client:
+        return doctors
+    
+    print(f"\n⚡ RAG Enrichment for {len(doctors)} doctors")
+    
+    enriched = []
+    for doctor in doctors:
+        doctor_copy = doctor.copy()
+        doctor_id = doctor.get("doctor_id")
+        name = doctor.get("name", "")
+        
+        try:
+            # Query RAG for doctor + symptom
+            search_query = f"{name} {user_context}"
+            rag_result = search_doctor_information(search_query, top_k=1)
+            
+            if rag_result.get("success") and rag_result.get("results"):
+                result = rag_result["results"][0]
+                
+                if result.get("doctor_id") == doctor_id:
+                    bio = result.get("bio", "")
+                    expertise = result.get("expertise", "")
+                    combined = f"{bio} {expertise}".lower()
+                    
+                    # Check if relevant to symptom
+                    if any(word in combined for word in user_context.lower().split()):
+                        doctor_copy["has_experience"] = True
+                        print(f"  ✓ {name}: Has relevant experience")
+        
+        except Exception as e:
+            print(f"  ✗ Enrichment error: {e}")
+        
+        enriched.append(doctor_copy)
+    
+    return enriched
+
+
+def find_doctors_by_specializations(
+    available_doctors: List[Dict[str, Any]],
+    specializations: List[str],
+    max_results: int = 3
+) -> List[Dict[str, Any]]:
+    """
+    Find doctors matching AI-recommended specializations
+    """
+    print(f"\n🔍 Searching for: {specializations}")
+    
+    found_doctors = []
+    
+    for spec in specializations:
+        matches = [
+            doc for doc in available_doctors
+            if spec.lower() in doc.get("specialization", "").lower()
+        ]
+        
+        if matches:
+            print(f"  ✅ Found {len(matches)} {spec} doctor(s)")
+            for match in matches:
+                if match not in found_doctors:
+                    match["matched_specialization"] = spec
+                    found_doctors.append(match)
+                    if len(found_doctors) >= max_results:
+                        return found_doctors
+    
+    if not found_doctors:
+        print(f"  ⚠️ No exact match, using fallback")
+        for doc in available_doctors[:max_results]:
+            doc["matched_specialization"] = "available"
+            found_doctors.append(doc)
+    
+    return found_doctors[:max_results]
+
+
+AI_FUNCTIONS = [
+    {
+        "name": "search_doctor_information",
+        "description": "Search for doctor by name (handles typos/STT errors like 'Anu Patel' → 'Aarav Patel') or get expertise info",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Doctor name or expertise query",
+                },
+                "top_k": {"type": "integer", "default": 3}
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "get_available_doctors",
+        "description": "Get intelligent doctor recommendations. AI analyzes symptoms and recommends appropriate specialists with reasons.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "user_context": {
+                    "type": "string",
+                    "description": "Patient's symptoms/condition (e.g., 'headache', 'fever')"
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "get_doctor_schedule",
+        "description": "Get available dates for a specific doctor",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "doctor_id": {"type": "string", "description": "Doctor ID (e.g., DOC2011)"}
+            },
+            "required": ["doctor_id"]
+        }
+    },
+    {
+        "name": "get_available_slots",
+        "description": "Get time slots for doctor on specific date",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "doctor_id": {"type": "string"},
+                "date": {"type": "string", "description": "YYYY-MM-DD"}
+            },
+            "required": ["doctor_id", "date"]
+        }
+    },
+    {
+        "name": "get_appointment_details",
+        "description": "Get existing appointment details",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "patient_name": {"type": "string"},
+                "patient_phone": {"type": "string"}
+            },
+            "required": ["patient_name", "patient_phone"]
+        }
+    },
+    {
+        "name": "book_appointment_in_hour_range",
+        "description": "Book appointment in specific hour",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "patient_name": {"type": "string"},
+                "patient_phone": {"type": "string"},
+                "doctor_id": {"type": "string"},
+                "appointment_date": {"type": "string"},
+                "time_range": {"type": "string", "description": "e.g., '3 PM'"},
+                "reason": {"type": "string"}
+            },
+            "required": ["patient_name", "patient_phone", "doctor_id", "appointment_date", "time_range"]
+        }
+    },
+]
+
 
 class AIToolsExecutor:
     """Executor for AI function calls"""
@@ -199,26 +355,25 @@ class AIToolsExecutor:
             "book_appointment_in_hour_range": self.book_appointment_in_hour_range,
             "get_doctor_schedule": self.get_doctor_schedule,
             "get_appointment_details": self.get_appointment_details,
-            "search_doctor_information": search_doctor_information # Add this mapping
+            "search_doctor_information": search_doctor_information
         }
     
     def execute_function(self, function_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         try:
-            print(f"\n--- Attempting to execute function: {function_name} ---")
-            print(f"Arguments received: {arguments}")
+            print(f"\n--- Executing: {function_name} ---")
+            print(f"Arguments: {arguments}")
 
             if function_name in self.functions:
                 func_to_call = self.functions[function_name]
                 is_method = hasattr(func_to_call, '__self__') and func_to_call.__self__ is self
 
                 if is_method:
-                    print(f"Executing '{function_name}' as instance method.")
                     result = func_to_call(**arguments)
                 else:
-                    print(f"Executing '{function_name}' as standalone function.")
                     result = func_to_call(**arguments)
 
-                print(f"--- Function '{function_name}' execution finished ---")
+                print(f"--- {function_name} complete ---")
+                
                 if isinstance(result, dict) and 'success' in result:
                     return result
                 elif isinstance(result, dict):
@@ -226,29 +381,26 @@ class AIToolsExecutor:
                     return result
                 else:
                     return {"success": True, "result": result}
-
             else:
-                print(f"Error: Unknown function name '{function_name}'")
                 return {"success": False, "error": f"Unknown function: {function_name}"}
+                
         except Exception as e:
-            print(f"Function execution error in '{function_name}': {e}")
+            print(f"Error in {function_name}: {e}")
             traceback.print_exc()
-            return {"success": False, "error": f"Error during execution of {function_name}: {str(e)}"}
+            return {"success": False, "error": str(e)}
 
-    def get_available_doctors(self, user_context: str) -> Dict[str, Any]:
-        """Get list of active doctors who are not on leave, filtered by symptoms/specialization"""
+    def get_available_doctors(self, user_context: str = "") -> Dict[str, Any]:
+        """
+        ⚡ AI-POWERED: Intelligent doctor recommendations
+        """
         try:            
             print(f"\n{'='*80}")
-            print(f"get_available_doctors called")
+            print(f"🧠 AI-POWERED DOCTOR RECOMMENDATION")
             print(f"User context: '{user_context}'")
-            print(f"Context length: {len(user_context)} chars")
             print(f"{'='*80}\n")
             
-            print("Fetching available doctors...")
-
+            # Get active doctors
             doctors = DoctorService.get_all_active_doctors(self.db)
-            print(f"Total ACTIVE doctors in DB: {len(doctors)}")
-
             today = date.today()
             doctors_on_leave = self.db.query(DoctorLeave.doctor_id).filter(
                 DoctorLeave.start_date <= today,
@@ -256,12 +408,10 @@ class AIToolsExecutor:
             ).all()
             
             on_leave_ids = [leave.doctor_id for leave in doctors_on_leave]
-            print(f"Doctors on leave: {len(on_leave_ids)}")
 
             active_doctors = []
             for doc in doctors:
-                is_on_leave = doc.doctor_id in on_leave_ids
-                if not is_on_leave:
+                if doc.doctor_id not in on_leave_ids:
                     active_doctors.append({
                         "doctor_id": doc.doctor_id,
                         "name": doc.name,
@@ -269,90 +419,88 @@ class AIToolsExecutor:
                         "specialization": doc.specialization or "General Medicine"
                     })
             
-            print(f"Available doctors before filtering: {len(active_doctors)}")
+            print(f"📋 {len(active_doctors)} doctors available")
 
-            if active_doctors:
-                spec_dist = Counter(d["specialization"] for d in active_doctors)
-                print(f"Specialization distribution:")
-                for spec, count in spec_dist.most_common():
-                    print(f"      - {spec}: {count}")
-
-            detected_specialization = None
-            if user_context:
-                print(f"\nDetecting specialization from: '{user_context}'")
-                detected_specialization = extract_specialization_from_text(user_context)
-                print(f"Detected: {detected_specialization or 'None'}")
-            else:
-                print(f"No user context provided - cannot detect specialization")
-
-            filtered_doctors = filter_doctors_by_specialization(
-                active_doctors,
-                detected_specialization
-            )
-            
-            print(f"\nFinal result: {len(filtered_doctors)} doctors")
-            for doc in filtered_doctors:
-                print(f"      - {doc['name']} ({doc['specialization']})")
-            print(f"\n{'='*80}\n")
-
-            if not filtered_doctors:
+            if not active_doctors:
                 return {
                     "success": False,
-                    "message": "No doctors are currently available.",
-                    "doctors": [],
-                    "specialization_detected": detected_specialization
+                    "message": "No doctors available",
+                    "doctors": []
                 }
             
-            print(f"Result success: True")
+            # ⚡ STEP 1: AI determines best specializations
+            if user_context:
+                specializations = get_ai_specialization_recommendations(user_context)
+            else:
+                specializations = ["General Medicine"]
             
+            # ⚡ STEP 2: Find matching doctors
+            recommended_doctors = find_doctors_by_specializations(
+                active_doctors,
+                specializations,
+                max_results=3
+            )
+            
+            # ⚡ STEP 3: RAG enrichment (optional, ~100ms)
+            if user_context:
+                recommended_doctors = enrich_doctors_with_rag(
+                    recommended_doctors,
+                    user_context
+                )
+            
+            # Add recommendation reasons
+            for doc in recommended_doctors:
+                spec = doc.get("matched_specialization", "available")
+                has_exp = doc.get("has_experience", False)
+                
+                if has_exp:
+                    doc["recommendation_reason"] = f"{spec}, experienced with {user_context}"
+                elif spec != "available":
+                    doc["recommendation_reason"] = f"{spec} specialist"
+                else:
+                    doc["recommendation_reason"] = f"available {doc.get('specialization', 'doctor')}"
+            
+            print(f"\n✅ Top {len(recommended_doctors)} doctors:")
+            for doc in recommended_doctors:
+                print(f"  - {doc['name']}: {doc.get('recommendation_reason', 'available')}")
+            print(f"\n{'='*80}\n")
+
             return {
                 "success": True,
-                "count": len(filtered_doctors),
-                "doctors": filtered_doctors,
-                "specialization_detected": detected_specialization
+                "count": len(recommended_doctors),
+                "doctors": recommended_doctors,
+                "ai_recommended_specializations": specializations
             }
             
         except Exception as e:
-            print(f"Error in get_available_doctors: {e}")
-            import traceback
+            print(f"Error: {e}")
             traceback.print_exc()
             return {"success": False, "error": str(e), "doctors": []}
 
-
     def get_appointment_details(self, patient_name: str, patient_phone: str) -> Dict[str, Any]:
-        """Executor for fetching appointment details."""
+        """Fetch appointment details"""
         try:
-            print(f"Searching for appointment for {patient_name} ({patient_phone})")
+            print(f"Searching appointment: {patient_name} ({patient_phone})")
             
             details = AppointmentService.get_appointment_details(self.db, patient_name, patient_phone)
             
             if details:
-                return {
-                    "success": True,
-                    "appointment": details
-                }
+                return {"success": True, "appointment": details}
             else:
-                return {
-                    "success": False,
-                    "error": "I couldn't find any scheduled appointments for that name and phone number."
-                }
+                return {"success": False, "error": "No appointments found"}
         except Exception as e:
-            print(f"Error in get_appointment_details: {e}")
+            print(f"Error: {e}")
             return {"success": False, "error": str(e)}
 
     def _parse_date(self, date_str: str) -> str:
-        """Parse various date formats to YYYY-MM-DD"""
-        
+        """Parse date to YYYY-MM-DD"""
         date_str = date_str.lower().strip()
         today = datetime.now().date()
 
         if "tomorrow" in date_str:
-            target_date = today + timedelta(days=1)
-            return target_date.strftime("%Y-%m-%d")
-        
+            return (today + timedelta(days=1)).strftime("%Y-%m-%d")
         if "today" in date_str:
             return today.strftime("%Y-%m-%d")
-
         if re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
             return date_str
 
@@ -374,21 +522,15 @@ class AIToolsExecutor:
         if month_num and len(numbers) == 1:
             day = int(numbers[0])
             year = today.year
-
             try:
                 parsed_date = datetime(year, month_num, day).date()
                 if parsed_date < today:
                     year += 1
-                    print(f"Date {day}/{month_num} is in past, using next year: {year}")
             except ValueError:
-                print(f"Invalid date {day}/{month_num}, keeping year {year}")
-            
-            result = f"{year:04d}-{month_num:02d}-{day:02d}"
-            print(f"   → Parsed as: {result}")
-            return result
+                pass
+            return f"{year:04d}-{month_num:02d}-{day:02d}"
 
         if month_num and len(numbers) >= 2:
-            # Format: "20th October 2025" or "October 20, 2025"
             day = int(numbers[0])
             year = int(numbers[1]) if len(numbers[1]) == 4 else int(numbers[0])
             if year < 100:
@@ -396,221 +538,87 @@ class AIToolsExecutor:
             return f"{year:04d}-{month_num:02d}-{day:02d}"
         
         if len(numbers) >= 3:
-            # Format: "20 10 2025" (DD MM YYYY)
             day, month, year = int(numbers[0]), int(numbers[1]), int(numbers[2])
             if year < 100:
                 year += 2000
             return f"{year:04d}-{month:02d}-{day:02d}"
         
         if len(numbers) == 2:
-            # Format: "20 10" (DD MM), use current year
             day, month = int(numbers[0]), int(numbers[1])
             year = today.year
             return f"{year:04d}-{month:02d}-{day:02d}"
         
-        # Fallback
         return date_str
 
     def _find_doctor_id_by_name(self, doctor_name: str) -> str:
-        """Find doctor ID by name (fuzzy matching)"""
+        """Find doctor by name (fuzzy)"""
         try:
             doctors = DoctorService.get_all_doctors(self.db)
+            doctor_name_clean = doctor_name.lower().replace('dr.', '').replace('dr', '').replace('doctor', '').strip()
             
-            doctor_name_lower = doctor_name.lower().strip()
-
-            doctor_name_clean = doctor_name_lower.replace('dr.', '').replace('dr', '').replace('doctor', '').strip()
-            
-            print(f"Looking for doctor: '{doctor_name}' (cleaned: '{doctor_name_clean}')")
-
             for doc in doctors:
                 if doc.name.lower().strip() == doctor_name_clean:
-                    print(f"Exact match: {doc.name} ({doc.doctor_id})")
                     return doc.doctor_id
 
             for doc in doctors:
                 if doctor_name_clean in doc.name.lower() or doc.name.lower() in doctor_name_clean:
-                    print(f"Partial match: {doc.name} ({doc.doctor_id})")
                     return doc.doctor_id
             
-            # No match found
-            print(f"No match found for '{doctor_name}'")
             return None
-            
         except Exception as e:
-            print(f"Error finding doctor: {e}")
+            print(f"Error: {e}")
             return None
-
 
     def get_available_slots(self, doctor_id: str, date: str) -> Dict[str, Any]:
-        """Get available time slots for a doctor on a date"""
+        """Get time slots"""
         try:
-            print(f"Checking slots for doctor='{doctor_id}', date='{date}'")
-            
-            # Check if doctor_id looks like a name instead of an ID
             if not doctor_id.startswith('DOC'):
-                print(f"'{doctor_id}' doesn't look like a doctor ID, attempting name lookup...")
                 resolved_id = self._find_doctor_id_by_name(doctor_id)
                 if resolved_id:
                     doctor_id = resolved_id
-                    print(f"Resolved to: {doctor_id}")
                 else:
-                    return {
-                        "success": False,
-                        "error": f"Could not find doctor '{doctor_id}'. Please specify the doctor again.",
-                        "slots": []
-                    }
+                    return {"success": False, "error": f"Doctor '{doctor_id}' not found", "slots": []}
             
-            # Parse and normalize the date
             formatted_date = self._parse_date(date)
-            print(f"   Formatted date: {formatted_date}")
             
-            # Validate date is not in the past
-            try:
-                date_obj = datetime.strptime(formatted_date, "%Y-%m-%d").date()
-                today = datetime.now().date()
-                if date_obj < today:
-                    return {
-                        "success": False,
-                        "error": f"The date {formatted_date} is in the past. Please provide a future date.",
-                        "slots": []
-                    }
-            except:
-                pass
+            date_obj = datetime.strptime(formatted_date, "%Y-%m-%d").date()
+            if date_obj < datetime.now().date():
+                return {"success": False, "error": f"Date {formatted_date} is in past", "slots": []}
             
-            # Get available slots
-            result = AppointmentService.get_available_slots(
-                self.db,
-                doctor_id,
-                formatted_date
-            )
-            
-            print(f"API Response: {result}")
+            result = AppointmentService.get_available_slots(self.db, doctor_id, formatted_date)
             
             if "available_slots" in result:
                 slots = result["available_slots"]
-                print(f"Found {len(slots)} slots")
-                
                 if not slots:
-                    return {
-                        "success": False,
-                        "error": f"No slots available on {formatted_date}. Please try another date.",
-                        "slots": []
-                    }
-                
-                return {
-                    "success": True,
-                    "doctor_id": doctor_id,
-                    "date": formatted_date,
-                    "slots": slots,
-                    "count": len(slots)
-                }
+                    return {"success": False, "error": f"No slots on {formatted_date}", "slots": []}
+                return {"success": True, "doctor_id": doctor_id, "date": formatted_date, "slots": slots, "count": len(slots)}
             else:
-                error = result.get("error", "No slots found")
-                return {
-                    "success": False,
-                    "error": error,
-                    "slots": []
-                }
+                return {"success": False, "error": result.get("error", "No slots"), "slots": []}
                 
         except Exception as e:
-            print(f"Error in get_available_slots: {e}")
-            import traceback
+            print(f"Error: {e}")
             traceback.print_exc()
-            return {
-                "success": False,
-                "error": f"Unable to check availability: {str(e)}",
-                "slots": []
-            }
+            return {"success": False, "error": str(e), "slots": []}
 
     def get_doctor_schedule(self, doctor_id: str) -> Dict[str, Any]:
-        """Get the next available dates for a specific doctor."""
+        """Get available dates"""
         try:
-            print(f"Fetching schedule for doctor: {doctor_id}")
-            from datetime import date
-            
-            # Resolve doctor ID from name if necessary
             if not doctor_id.startswith('DOC'):
                 resolved_id = self._find_doctor_id_by_name(doctor_id)
                 if not resolved_id:
-                     return {"success": False, "error": f"Could not find a doctor named '{doctor_id}'."}
+                    return {"success": False, "error": f"Doctor '{doctor_id}' not found"}
                 doctor_id = resolved_id
 
             available_dates = DoctorService.get_doctor_schedule(self.db, doctor_id, date.today())
             
             if not available_dates:
-                return {
-                    "success": False,
-                    "error": "This doctor has no upcoming availability. Please check another doctor."
-                }
+                return {"success": False, "error": "No upcoming availability"}
             
-            return {
-                "success": True,
-                "doctor_id": doctor_id,
-                "available_dates": available_dates
-            }
+            return {"success": True, "doctor_id": doctor_id, "available_dates": available_dates}
         except Exception as e:
-            print(f"Error in get_doctor_schedule: {e}")
+            print(f"Error: {e}")
             return {"success": False, "error": str(e)}
 
-    def book_appointment(
-        self,
-        patient_name: str,
-        patient_phone: str,
-        doctor_id: str,
-        appointment_date: str,
-        appointment_time: str,
-        reason: str = ""
-    ) -> Dict[str, Any]:
-        """Book an appointment"""
-        try:
-            
-            print(f"Booking appointment for {patient_name}")
-            
-            # Parse date
-            formatted_date = self._parse_date(appointment_date)
-
-            appointment_data = AppointmentCreate(
-                patient_name=patient_name.strip(),
-                patient_phone=patient_phone.strip(),
-                patient_email=None,
-                doctor_id=doctor_id,
-                appointment_date=formatted_date,
-                appointment_time=appointment_time,
-                notes=reason or "Booked via voice call",
-                status="SCHEDULED"
-            )
-
-            appointment = AppointmentService.create_appointment(
-                self.db,
-                appointment_data
-            )
-            
-            if appointment:
-                print(f"Appointment booked: APT-{appointment.id}")
-                return {
-                    "success": True,
-                    "appointment_id": appointment.id,
-                    "confirmation_number": f"APT-{appointment.id}",
-                    "patient_name": appointment.patient_name,
-                    "doctor_id": appointment.doctor_id,
-                    "date": str(appointment.appointment_date),
-                    "time": appointment.appointment_time
-                }
-            else:
-                return {
-                    "success": False,
-                    "error": "Failed to create appointment"
-                }
-                
-        except Exception as e:
-            print(f"Error in book_appointment: {e}")
-            import traceback
-            traceback.print_exc()
-            return {
-                "success": False,
-                "error": f"Booking failed: {str(e)}"
-            }
-            
     def book_appointment_in_hour_range(
         self,
         patient_name: str,
@@ -620,86 +628,43 @@ class AIToolsExecutor:
         time_range: str,
         reason: str = ""
     ) -> Dict[str, Any]:
-        """
-        Book appointment in first available slot within specified hour range.
-        Tries all slots in the hour until one succeeds.
-        """
+        """Book in hour range"""
         try:
-            from fastapi import HTTPException
-            
-            print(f"\n{'='*80}")
-            print(f"Booking appointment in hour range")
-            print(f"Patient: {patient_name}")
-            print(f"Phone: {patient_phone}")
-            print(f"Doctor: {doctor_id}")
-            print(f"Date: {appointment_date}")
-            print(f"Time range: {time_range}")
-            print(f"{'='*80}\n")
-            
             numbers = re.findall(r'\d+', time_range)
-            
             if not numbers:
-                return {
-                    "success": False,
-                    "error": "I couldn't understand the time. Please specify an hour like '2 PM' or 'between 10 and 11 AM'."
-                }
+                return {"success": False, "error": "Could not parse time"}
             
             hour = int(numbers[0])
-            
-            # Handle PM/AM
             if "pm" in time_range.lower() and hour < 12:
                 hour += 12
             elif "am" in time_range.lower() and hour == 12:
                 hour = 0
             
-            print(f"✓ Parsed hour: {hour}:00-{hour+1}:00")
-            
-            # Get available slots
             slots_result = self.get_available_slots(doctor_id, appointment_date)
-            
             if not slots_result.get("success"):
-                return {
-                    "success": False,
-                    "error": slots_result.get("error", "No slots available on that date")
-                }
+                return {"success": False, "error": slots_result.get("error")}
             
             available_slots = slots_result.get("slots", [])
             slots_in_hour = [s for s in available_slots if s.startswith(f"{hour:02d}:")]
             
-            print(f"✓ Found {len(slots_in_hour)} slots in hour {hour}")
-            
             if not slots_in_hour:
-                return {
-                    "success": False,
-                    "error": f"No available slots between {hour}:00 and {hour+1}:00. Please choose a different time."
-                }
+                return {"success": False, "error": f"No slots between {hour}:00-{hour+1}:00"}
             
-            # Try to book each slot until one succeeds
-            last_error = ""
-            
-            for slot_to_try in sorted(slots_in_hour):
-                print(f"  → Trying slot: {slot_to_try}")
-                
+            for slot in sorted(slots_in_hour):
                 try:
                     appointment_data = AppointmentCreate(
                         patient_name=patient_name.strip(),
                         patient_phone=patient_phone.strip(),
                         doctor_id=doctor_id,
                         appointment_date=appointment_date,
-                        appointment_time=slot_to_try,
-                        notes=reason or "Booked via voice call",
+                        appointment_time=slot,
+                        notes=reason or "Booked via voice",
                         status="SCHEDULED"
                     )
                     
                     appointment = AppointmentService.create_appointment(self.db, appointment_data)
-                    
                     if appointment:
-                        # Get doctor details
                         doctor = DoctorService.get_doctor_by_id(self.db, doctor_id)
-                        
-                        print(f"Booked successfully at {slot_to_try}!")
-                        print(f"{'='*80}\n")
-                        
                         return {
                             "success": True,
                             "appointment": {
@@ -712,38 +677,18 @@ class AIToolsExecutor:
                                 "appointment_time": appointment.appointment_time
                             }
                         }
-                    
-                except HTTPException as e:
-                    last_error = e.detail
-                    print(f"  ✗ Slot {slot_to_try} failed: {e.detail}")
-                    self.db.rollback()
-                    continue
-                
                 except Exception as e:
-                    last_error = str(e)
-                    print(f"  ✗ Error: {e}")
                     self.db.rollback()
                     continue
             
-            # All slots failed
-            print(f"No slots could be booked")
-            print(f"{'='*80}\n")
-            
-            return {
-                "success": False,
-                "error": f"All slots between {hour}:00 and {hour+1}:00 are unavailable. {last_error}"
-            }
+            return {"success": False, "error": f"All slots in hour {hour} unavailable"}
             
         except Exception as e:
-            print(f"Major error: {e}")
-            import traceback
+            print(f"Error: {e}")
             traceback.print_exc()
             self.db.rollback()
-            return {
-                "success": False,
-                "error": f"System error: {str(e)}"
-            }
+            return {"success": False, "error": str(e)}
+
 
 def get_ai_functions() -> List[Dict[str, Any]]:
-    """Get list of available functions for GPT-4"""
     return AI_FUNCTIONS

@@ -98,7 +98,7 @@ class OpenAIService:
         compress: bool = True
     ) -> List[Dict[str, str]]:
         """
-        ⚡ ULTRA FAST: Aggressive compression
+        ⚡ OPTIMIZED: Keep 12 messages (prevents tool call breakage)
         """
         messages = []
         
@@ -110,18 +110,18 @@ class OpenAIService:
 
             enhanced_system_prompt = f"""{self.system_prompt}
 
-Today: {day_of_week}, {current_date_str}
-Year: {current_year}
-Date format: YYYY-MM-DD"""
+    Today: {day_of_week}, {current_date_str}
+    Year: {current_year}
+    Date format: YYYY-MM-DD"""
             
             messages.append({
                 "role": "system",
                 "content": enhanced_system_prompt
             })
 
-        # ⚡ AGGRESSIVE COMPRESSION: Last 10 messages (reduced from 15)
-        if compress and len(conversation_history) > 10:
-            keep_from = len(conversation_history) - 10
+        # ⚡ BALANCED: 12 messages (sweet spot - fast but stable)
+        if compress and len(conversation_history) > 12:
+            keep_from = len(conversation_history) - 12
             
             # Find safe boundary
             for i in range(keep_from, max(0, keep_from - 5), -1):
