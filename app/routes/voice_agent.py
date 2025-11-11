@@ -1,4 +1,4 @@
-# app/routes/voice_agent.py - COMPLETE OPTIMIZED VERSION
+# app/routes/voice_agent.py - COMPLETE OPTIMIZED VERSION WITH ABBREVIATION FIX
 
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect, Form, Query, Depends
 from fastapi.responses import Response, JSONResponse
@@ -141,9 +141,8 @@ async def handle_full_transcript(
     speech_end_time: float = None
 ):
     """
-    ⚡ ULTRA OPTIMIZED: Stream after first complete sentence
+    ⚡ FIXED: Better sentence detection to prevent choppy audio
     """
-    # Start tracking
     interaction_id = str(uuid.uuid4())[:8]
     metrics = latency_tracker.start_interaction(call_sid, interaction_id)
     
@@ -162,7 +161,6 @@ async def handle_full_transcript(
     if not agent:
         return
     
-    # ⚡ Set Deepgram state: AI about to speak
     deepgram_service = context.get("deepgram")
     if deepgram_service:
         deepgram_service.set_speaking_state(True)
@@ -176,6 +174,26 @@ async def handle_full_transcript(
         tts_started = False
         tts_task = None
         
+        # ⚡ HELPER: Check if this is a real sentence ending
+        def is_real_sentence_end(text: str) -> bool:
+            """Check if text ends with real sentence ending (not abbreviation)"""
+            text = text.strip()
+            if not text:
+                return False
+            
+            # Common abbreviations that should NOT trigger sentence end
+            abbreviations = ['Dr.', 'Mr.', 'Mrs.', 'Ms.', 'Sr.', 'Jr.', 'Prof.', 'St.']
+            
+            # Check if ends with sentence punctuation
+            if text.endswith(('.', '!', '?')):
+                # But not if it's an abbreviation
+                for abbr in abbreviations:
+                    if text.endswith(abbr):
+                        return False
+                return True
+            
+            return False
+        
         async for chunk_data in agent.process_user_speech_streaming(call_sid, transcript, metrics):
             chunk_type = chunk_data["type"]
             
@@ -184,14 +202,15 @@ async def handle_full_transcript(
                 text_buffer += text_chunk
                 sentence_buffer += text_chunk
                 
-                # ⚡ OPTIMIZED: Start TTS after first complete sentence
+                # ⚡ OPTIMIZED: Start TTS after REAL sentence (not abbreviation)
                 if not tts_started:
-                    # Check for sentence ending punctuation
-                    if sentence_buffer.strip().endswith(('.', '!', '?')):
-                        logger.info(f"⚡ Starting TTS after first sentence ({len(sentence_buffer.split())} words)")
+                    word_count = len(sentence_buffer.split())
+                    
+                    # Need at least 8 words AND real sentence ending
+                    if word_count >= 8 and is_real_sentence_end(sentence_buffer):
+                        logger.info(f"⚡ Starting TTS after first sentence ({word_count} words)")
                         tts_started = True
                         
-                        # Start TTS with first complete sentence
                         tts_task = asyncio.create_task(
                             _generate_and_stream_audio(
                                 sentence_buffer.strip(),
@@ -203,18 +222,16 @@ async def handle_full_transcript(
                             )
                         )
                         
-                        sentence_buffer = ""  # Reset buffer
+                        sentence_buffer = ""
                 
             elif chunk_type == "complete":
                 ai_result = chunk_data["data"]
                 response_complete = True
                 
-                # Wait for first TTS to finish
                 if tts_task:
                     await tts_task
                     tts_task = None
                 
-                # Generate TTS for remaining text
                 if sentence_buffer.strip():
                     await _generate_and_stream_audio(
                         sentence_buffer.strip(),
@@ -231,7 +248,7 @@ async def handle_full_transcript(
                 logger.error(f"❌ Streaming error: {chunk_data['data']}")
                 break
         
-        # If response was too short (no sentence ending), generate TTS now
+        # If response was too short, generate TTS now
         if not tts_started and text_buffer:
             await _generate_and_stream_audio(
                 text_buffer.strip(),
@@ -242,25 +259,21 @@ async def handle_full_transcript(
                 call_sid=call_sid
             )
         
-        # Log AI response
         if ai_result:
             response_text = ai_result.get("response", "")
             if response_text:
                 preview = response_text[:80] + ('...' if len(response_text) > 80 else '')
                 logger.info(f"💬 AI: '{preview}'")
         
-        # ⚡ Reset Deepgram state
         if deepgram_service:
             deepgram_service.set_speaking_state(False)
         
-        # Complete tracking
         latency_tracker.complete_interaction(interaction_id)
         
     except Exception as e:
         logger.error(f"❌ Error: {e}")
         traceback.print_exc()
         
-        # Reset state on error
         if deepgram_service:
             deepgram_service.set_speaking_state(False)
         
@@ -269,7 +282,6 @@ async def handle_full_transcript(
         except:
             pass
 
-        # Error recovery
         try:
             error_msg = "I apologize, I'm having trouble. Could you try again?"
             logger.info("🔧 Sending error message...")
