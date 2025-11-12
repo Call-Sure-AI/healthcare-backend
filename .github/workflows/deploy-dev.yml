@@ -64,19 +64,38 @@ jobs:
               -p 127.0.0.1:8001:8000 \
               --network healthcare-backend_healthcare-network \
               --restart unless-stopped \
-              --health-cmd="curl -f http://localhost:8000/api/health || exit 1" \
-              --health-interval=30s \
-              --health-timeout=10s \
-              --health-retries=3 \
               healthcare-backend-app:dev
-            
-            # Wait for container to be healthy
-            echo "Waiting for container to be healthy..."
-            timeout 60 sh -c 'until docker inspect --format="{{.State.Health.Status}}" healthcare-backend-dev | grep -q healthy; do sleep 2; done' || {
-              echo "Container failed to become healthy"
+
+            # Wait for application to be ready
+            echo "Waiting for application to be ready..."
+            sleep 10
+
+            # Check if container is running
+            if ! docker ps | grep -q healthcare-backend-dev; then
+              echo "Container is not running!"
               docker logs healthcare-backend-dev --tail 50
               exit 1
-            }
+            fi
+
+            # Test the health endpoint
+            echo "Testing health endpoint..."
+            max_attempts=12
+            attempt=0
+            while [ $attempt -lt $max_attempts ]; do
+              if curl -f http://127.0.0.1:8001/api/health > /dev/null 2>&1; then
+                echo "✓ Application is healthy!"
+                break
+              fi
+              attempt=$((attempt + 1))
+              echo "Attempt $attempt/$max_attempts - waiting..."
+              sleep 5
+            done
+
+            if [ $attempt -eq $max_attempts ]; then
+              echo "Application failed to become healthy"
+              docker logs healthcare-backend-dev --tail 50
+              exit 1
+            fi
             
             echo "=== Development Deployment Complete ==="
             docker ps -a | grep healthcare-backend-dev
