@@ -18,6 +18,7 @@ import traceback
 import json
 import time
 import asyncio
+from app.services.knowledge_base_service import knowledge_base_service
 
 logger = logging.getLogger("agent")
 
@@ -25,7 +26,53 @@ class VoiceAgentService:
     def __init__(self, db: Session):
         self.db = db
         self.ai_tools = AIToolsExecutor(db)
-    
+
+    async def _enrich_with_knowledge_base(
+        self,
+        user_text: str,
+        conversation_history: List[Dict[str, str]]
+    ) -> List[Dict[str, str]]:
+
+        try:
+            # Check if query needs knowledge base
+            intent = knowledge_base_service.classify_query_intent(user_text)
+            
+            if intent == "doctor_search":
+                # Pure appointment booking - no KB needed
+                return conversation_history
+            
+            # Try direct answer first (for simple questions)
+            direct_answer = knowledge_base_service.answer_direct_question(user_text)
+            if direct_answer:
+                logger.info(f"Using direct KB answer")
+                # Return enriched history with direct answer injected
+                enriched = conversation_history.copy()
+                enriched.append({
+                    "role": "system",
+                    "content": f"DIRECT ANSWER: {direct_answer}"
+                })
+                return enriched
+            
+            # Get KB context for more complex questions
+            if intent in ["knowledge_base", "hybrid"]:
+                context, _ = knowledge_base_service.get_context_for_query(user_text, max_length=400)
+                
+                if context:
+                    logger.info(f"KB context added: {len(context)} chars")
+                    # Inject context as system message
+                    enriched = conversation_history.copy()
+                    enriched.append({
+                        "role": "system",
+                        "content": f"CLINIC INFORMATION: {context}\n\nUse this information to answer the patient's question accurately."
+                    })
+                    return enriched
+            
+            return conversation_history
+            
+        except Exception as e:
+            logger.error(f"KB enrichment error: {e}")
+            return conversation_history
+
     async def initiate_call(self, call_sid: str, from_number: str, to_number: str) -> Dict[str, Any]:
         try:
             session_data = {
@@ -68,9 +115,7 @@ class VoiceAgentService:
         user_text: str,
         metrics: 'LatencyMetrics' = None
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        """
-        ⚡ FIXED: STREAMING version with proper tool call storage
-        """
+
         try:
             redis_service.append_to_conversation(call_sid, "user", user_text)
             session = redis_service.get_session(call_sid)
@@ -78,11 +123,11 @@ class VoiceAgentService:
             if not session:
                 yield {"type": "error", "data": "Session not found"}
                 return
-            
+
             conversation_history = session.get("conversation_history", [])
+            conversation_history = await self._enrich_with_knowledge_base(user_text, conversation_history)
             ai_functions_schema = get_ai_functions()
-            
-            # ⚡ Check cache first
+
             query_hash = redis_service.hash_query(user_text)
             cached_response = redis_service.get_cached_response(query_hash)
             
