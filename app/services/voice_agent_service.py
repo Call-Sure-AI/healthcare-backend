@@ -123,7 +123,8 @@ class VoiceAgentService:
             if not session:
                 yield {"type": "error", "data": "Session not found"}
                 return
-            
+
+            conversation_history = session.get("conversation_history", [])
             conversation_history = await self._enrich_with_knowledge_base(user_text, conversation_history)
             ai_functions_schema = get_ai_functions()
 
