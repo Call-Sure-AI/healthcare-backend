@@ -7,6 +7,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.config.database import engine, Base
 from app.routes import doctor, appointment
 from app.routes import voice_agent
+from app.routes import embeddings
 from app.config.redis_config import redis_config
 from app.config.voice_config import voice_config
 import time
@@ -284,6 +285,7 @@ app.include_router(system_router)
 app.include_router(doctor.router, prefix="/api/v1", tags=["👨‍⚕️ Doctors"])
 app.include_router(appointment.router, prefix="/api/v1", tags=["📅 Appointments"])
 app.include_router(voice_agent.router, prefix="/api/v1", tags=["Voice Agent"])
+app.include_router(embeddings.router, prefix="/api/v1", tags=["Embeddings"])
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
